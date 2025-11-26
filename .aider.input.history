@@ -1,0 +1,2103 @@
+
+# 2025-11-23 15:22:32.733908
++y
+
+# 2025-11-23 15:23:27.316069
++You are working on a local music streaming / file sharing app called OnestarStream.
++
++Architecture constraints:
++
++Next.js 16, TypeScript, App Router.
++
++Audio/video/image files are saved under public/media/ and served directly (no streaming API).
++
++Metadata is stored in media.json via src/lib/mediaStore.ts.
++
++The main library UI is in src/app/page.tsx.
++
++Upload page is src/app/upload/page.tsx.
++
++Please preserve:
++
++The existing behavior of listing media on /.
++
++Uploading files via /upload and storing them in public/media.
++
++The deletion behavior using /api/media/[id] and deleteMedia.
++
++When you change types or add new fields to MediaItem, make sure all affected files are updated consistently.
+
+# 2025-11-23 15:31:12.115168
++ou are working on my local Next.js 16 app called OnestarStream.
++
++Current setup (do not break this):
++
++Next.js 16, TypeScript, App Router.
++
++Media files are saved under public/media/ and served directly as /media/${fileName}.
++
++Metadata is stored in media.json via src/lib/mediaStore.ts.
++
++The main library UI is src/app/page.tsx, which already renders one card per track with a hamburger menu on the right side of each track.
++
++Uploads are handled in src/app/upload/page.tsx.
++
++I want deletes to be local-only: deleting a track only affects this user’s local OnestarStream instance (which is already how the app works).
++
++Goal:
++Implement a “Delete” action inside the existing hamburger menu on each individual track, so that:
++
++Clicking the Delete option removes that track from the UI,
++
++and also deletes the file from public/media/,
++
++and removes its entry from media.json.
++
++Backend requirements:
++
++In src/lib/mediaStore.ts, ensure there is a function:
++
++async function deleteMedia(id: string): Promise<boolean> that:
++
++loads all media items from media.json,
++
++finds the item with that id,
++
++removes it from the array and saves the updated array back to media.json,
++
++deletes the corresponding file from public/media/<fileName>, ignoring ENOENT if the file is already missing,
++
++returns true if an item was deleted, false if no item with that id exists.
++
++In src/app/api/media/[id]/route.ts, implement a DELETE handler that:
++
++receives the id from params,
++
++calls deleteMedia(id),
++
++returns 204 No Content if deleteMedia returns true,
++
++returns 404 if no such media item exists.
++
++Do not change how files are saved (still public/media) or how /api/media works.
++
++Frontend requirements (hamburger menu delete):
++
++In src/app/page.tsx, use the existing hamburger menu on the right side of each track and add a “Delete” option inside that menu (do not remove the hamburger menu; just extend it).
++
++When the user clicks the Delete option for a given track:
++
++Show a window.confirm dialog with text like:
++
++"Delete this media file from your OnestarStream? This only affects your local app."
++
++If they cancel, do nothing.
++
++If they confirm:
++
++Call fetch('/api/media/<id>', { method: 'DELETE' }).
++
++While the request is in flight, optionally show some “Deleting…” state in the menu or disable the delete option.
++
++On success (204 / ok), remove that item from the React state so it disappears from the list without a full reload.
++
++Close the hamburger menu for that item.
++
++On failure, log the error and show a simple alert("Failed to delete media.").
++
++Keep the existing playback behavior intact:
++
++Audio/video/image should continue to use src={/media/${item.fileName}} for playback.
++
++Do not revert to using /api/stream.
++
++Make sure TypeScript stays happy: update types if needed, avoid any where possible.
++
++General constraints:
++
++Do not introduce any syncing between users or remote state; deletes must affect only this local instance.
++
++Keep changes minimal and focused: do not restructure unrelated parts of the UI.
++
++After implementing, summarize which files you changed and the key logic for delete flow.
+
+# 2025-11-23 15:46:17.496317
++You are working on my local Next.js 16 app called OnestarStream.
++
++Current setup (do not break this):
++
++Next.js 16, TypeScript, App Router.
++
++Media files are currently saved under public/media/ and served directly as /media/${fileName}.
++
++Metadata is stored in media.json via src/lib/mediaStore.ts.
++
++The main library UI is src/app/page.tsx which:
++
++calls /api/media to get a list of media items,
++
++renders players for audio/video/image,
++
++uses /media/${item.fileName} as the source for normal tracks,
++
++shows a Download link per item.
++
++Uploads are handled by src/app/upload/page.tsx and the POST handler in src/app/api/media/route.ts.
++
++There is already delete functionality using deleteMedia in src/lib/mediaStore.ts and a DELETE handler in src/app/api/media/[id]/route.ts.
++
++Goal: “Protected” (sandboxed) tracks with an encrypted folder
++I want an MVP where:
++
++Some tracks are “normal” (local), stored as plain files in public/media/, playable and downloadable.
++
++Some tracks are “protected” (sandboxed shared imports):
++
++Their audio files are stored in an encrypted folder on disk, not directly under public/.
++
++They can be played inside the app and deleted, but they do not show a download button in the UI.
++
++This behavior is per-machine / per-instance only (no central server).
++
++Backend changes – model + storage:
++
++In src/lib/mediaStore.ts, extend the MediaItem interface to include:
++
++protected: boolean; // true = encrypted/sandboxed, false = current behavior
++
++For existing entries in media.json that lack this field, treat them as protected: false by default. Ensure getAllMedia() returns valid MediaItem[] with protected filled in.
++
++Introduce a new storage directory for encrypted files, e.g.:
++
++const SECURE_MEDIA_DIR = path.join(process.cwd(), 'secure_media');
++
++
++and have ensureSetup() create this directory as well.
++
++Add helper functions in src/lib/mediaStore.ts to encrypt and decrypt Buffers using Node’s crypto module (AES-256-GCM is fine):
++
++Use a symmetric key from an env var like process.env.ONESTAR_KEY with a reasonable default for local dev (e.g. a hard-coded 32-byte hex string) if the env var is missing.
++
++For each encrypted file, generate a random IV and store [iv][authTag][ciphertext] in the file, or another simple layout you prefer.
++
++Implement:
++
++function encryptBuffer(plain: Buffer): Buffer
++function decryptBuffer(encrypted: Buffer): Buffer
++
++
++Update addMedia so it can handle both plain and protected items:
++
++Extend its input type to allow an optional protected?: boolean.
++
++If protected === true:
++
++Encrypt the contents Buffer,
++
++Save the encrypted bytes under SECURE_MEDIA_DIR with a file name derived from the id (e.g. ${id}.bin),
++
++Set mediaItem.protected = true and still store a fileName field (you can store the .bin name or the original extension – whichever is easiest, but be consistent).
++
++If protected === false or undefined (normal behavior):
++
++Keep the existing behavior of writing the raw contents to public/media,
++
++Set mediaItem.protected = false.
++
++Keep the existing deleteMedia behavior, but extend it to also delete encrypted files in SECURE_MEDIA_DIR when protected === true.
++
++Backend – protected streaming endpoint:
++7. Create a new App Router API route at src/app/api/protected-stream/[id]/route.ts with a GET handler that:
++
++Looks up the media item by id using getMediaById.
++
++Verifies that protected === true; if not, return 404.
++
++Reads the encrypted file from SECURE_MEDIA_DIR for that item.
++
++Decrypts it with decryptBuffer into a Buffer.
++
++Sends it back as a full file in a 200 response with appropriate Content-Type based on the original extension (similar to how getContentType worked before).
++
++For the MVP, you can skip HTTP Range support and just send the whole Buffer.
++
++Upload – mark a track as protected (sandboxed import):
++8. In src/app/upload/page.tsx, add a checkbox to the form:
++
++Label: “Mark as protected (play-only, no download)” or similar.
++
++When checked, the upload should create a media item with protected = true.
++
++When unchecked, protected = false (normal behavior).
++
++Update the POST handler in src/app/api/media/route.ts to read this checkbox from the FormData (e.g. protectedUpload field) and pass protected: boolean into addMedia.
++
++Frontend UI – play vs download behavior:
++10. In src/app/page.tsx, update the local MediaItem type to include protected: boolean.
++11. For each item:
++- If item.protected === false:
++- Keep using /media/${item.fileName} as the src for the <audio> / <video> / <img> elements, just like now.
++- Keep showing the Download link to /media/${item.fileName}.
++- If item.protected === true:
++- Use /api/protected-stream/${item.id} as the src for the player (audio/video).
++- Hide the Download link entirely for that item (or clearly disable it).
++- Optionally show a small badge like “Protected / play-only” on the card so it’s visually obvious.
++12. Keep delete behavior the same from the user’s perspective: they can still delete either type of track (normal or protected) from their library, and the corresponding file (plain or encrypted) should be removed from disk.
++
++Constraints and notes:
++
++All of this is per-instance / per-user. There is no central server or multi-user auth; users send raw files to each other out-of-band (e.g. email, AirDrop), then import as protected via the upload form.
++
++This is not perfect DRM; the goal is to sandbox protected tracks with:
++
++encrypted on-disk storage,
++
++no download button in the app,
++
++and only “play or delete” via the UI.
++
++Do not remove or break existing functionality for non-protected tracks.
++
++Do not reintroduce /api/stream for normal tracks; they should still use /media/${fileName}.
++
++Keep TypeScript types consistent and avoid any.
++
++After you implement this, please summarize:
++
++Which files you changed,
++
++How a user imports a protected track,
++
++How a protected track is stored and served,
++
++And what the UX differences are between normal vs protected tracks in the library.
+
+# 2025-11-23 15:48:33.425828
++There is a syntax error in ensureSetup in src/lib/mediaStore.ts. The fs.access(META_PATH) call should be wrapped in a proper try { ... } catch { ... } block.
++Please rewrite ensureSetup to:
++
++async function ensureSetup() {
++  await fs.mkdir(MEDIA_DIR, { recursive: true });
++  await fs.mkdir(SECURE_MEDIA_DIR, { recursive: true });
++
++  try {
++    await fs.access(META_PATH);
++  } catch {
++    await fs.writeFile(META_PATH, '[]', 'utf8');
++  }
++}
++
++
++and ensure the function compiles without syntax errors.
+
+# 2025-11-23 15:50:19.101183
++While aider has src/lib/mediaStore.ts loaded, paste this prompt into aider:
++
++There is a build error in src/lib/mediaStore.ts about cannot reassign to a variable declared with const for filePath inside addMedia.
++Please refactor addMedia so that:
++
++filePath is declared once with let filePath: string; near the top of the function (after computing id, ext, and fileName),
++
++and then assigned inside the if (input.protected) branch and the else branch, instead of declaring it with const and then reassigning it.
++Do not change the overall behavior of protected vs non-protected saves; just fix the const/let issue so the file compiles.
+
+# 2025-11-23 16:03:16.390588
++cd ~/projects/onestarstream
++aider \
++  src/lib/mediaStore.ts \
++  src/app/upload/page.tsx \
++  src/app/api/media/route.ts \
++  src/app/page.tsx \
++  src/app/api/protected-stream/[id]/route.ts
++You are working on my local Next.js 16 app called OnestarStream.
++
++Current setup (important):
++
++Next.js 16, TypeScript, App Router.
++
++Plain media files are stored under public/media/ and served as /media/${fileName}.
++
++Encrypted “protected” media files are stored under secure_media/ and served via GET /api/protected-stream/[id], which decrypts with getDecryptedMediaBuffer from src/lib/mediaStore.ts.
++
++src/lib/mediaStore.ts has:
++
++MediaItem with a protected: boolean field.
++
++addMedia(input) that, when input.protected === true, writes encrypted bytes to secure_media/<id>.bin and sets protected: true; otherwise, it writes a plain file to public/media and sets protected: false.
++
++getMediaFilePath, getDecryptedMediaBuffer, and deleteMedia working with both protected and non-protected items.
++
++src/app/api/media/route.ts handles uploads with POST, calling addMedia and passing a protected flag based on a protectedUpload field in the form.
++
++src/app/upload/page.tsx currently shows a checkbox labeled something like “Mark as protected (play-only, no download)”, which maps to that protectedUpload field.
++
++src/app/page.tsx renders the library:
++
++It uses /media/${item.fileName} as the player src when item.protected === false.
++
++It uses /api/protected-stream/${item.id} as the player src when item.protected === true.
++
++It shows a Download link to /media/${item.fileName} for non-protected items.
++
++It does not show a Download link for protected items and may show a “Protected / play only” badge.
++
++Goal: “Downloadable” checkbox for the sender that controls sandboxing
++I want this behavior:
++
++On the upload form, the sender sees a checkbox labeled something like “Downloadable” or “Allow download”.
++
++If the sender checks this box before uploading:
++
++The track should be stored as a normal, non-protected file (protected === false), in public/media, and the existing Download button should appear and work in the UI.
++
++If the sender leaves this box unchecked:
++
++The track should be stored as a protected/sandboxed file (protected === true), encrypted in secure_media, played via /api/protected-stream/[id], and the Download button must not appear in the UI (play or delete only).
++
++Changes to implement:
++
++In src/app/upload/page.tsx:
++
++Replace the current “protected” checkbox with a new checkbox labeled “Downloadable” (or “Allow download”).
++
++The checkbox should submit a form field called downloadable (e.g. "on" when checked).
++
++The default state should be checked (downloadable) so existing behavior is preserved by default.
++
++In src/app/api/media/route.ts POST handler:
++
++Stop reading protectedUpload from the form.
++
++Instead, read a downloadable field:
++
++const downloadableField = formData.get('downloadable') as string | null;
++
++Compute const isDownloadable = downloadableField === 'on' || downloadableField === 'true' || downloadableField === '1';
++
++Derive isProtected from that:
++
++If isDownloadable is true, isProtected should be false.
++
++If isDownloadable is false, isProtected should be true.
++
++Call addMedia with protected: isProtected.
++
++Keep all other behavior (title, type, buffer, etc.) the same.
++
++In src/lib/mediaStore.ts:
++
++Keep using protected: boolean as you currently do:
++
++protected === false → plain file in public/media.
++
++protected === true → encrypted file in secure_media.
++
++Ensure normalizeMediaItem (if present) or equivalent logic treats missing protected as false so older entries remain downloadable by default.
++
++No other logic changes are needed here beyond making sure the protected field stays consistent.
++
++In src/app/page.tsx:
++
++Keep the current logic where:
++
++item.protected === false → player src is /media/${item.fileName}.
++
++item.protected === true → player src is /api/protected-stream/${item.id} and an optional “Protected / play only” badge is shown.
++
++Ensure the Download link logic is:
++
++Only show the Download link when item.protected === false.
++
++Do not show the Download link when item.protected === true.
++
++The net effect must be:
++
++If the sender checked “Downloadable” when uploading, the track appears as non-protected with a working Download button.
++
++If they did not check it, the track appears as protected/sandboxed, playable and deletable only, with no Download button.
++
++Constraints:
++
++Do not change the protected-stream API structure or encryption format.
++
++Do not remove or break existing delete behavior. Protected and non-protected tracks should still be deletable via the existing delete flow.
++
++Do not change the route structure (/api/protected-stream/[id], /api/media, etc.).
++
++Keep TypeScript types consistent and avoid any.
++
++After editing, please summarize:
++
++What changed in src/app/upload/page.tsx, src/app/api/media/route.ts, src/lib/mediaStore.ts, and src/app/page.tsx.
++
++How a sender uses the “Downloadable” checkbox to control whether a recipient sees a download button or just a play/delete-only protected track.
+
+# 2025-11-23 16:19:10.444066
++cd ~/projects/onestarstream
++aider \
++  src/lib/mediaStore.ts \
++  src/app/page.tsx \
++  src/app/upload/page.tsx \
++  src/app/api/media/route.ts \
++  src/app/api/media/[id]/route.ts
++You are working on my Next.js 16 App Router project called OnestarStream. This is a local media streaming app (audio/video/image) with a custom mediaStore that saves files under public/media and metadata in media.json.
++
++Current important behavior (do not break):
++
++src/lib/mediaStore.ts currently works and I want to keep its behavior:
++
++It creates public/media.
++
++addMedia writes raw files to public/media and appends a MediaItem entry to media.json.
++
++getAllMedia and getMediaById work and are used by the app.
++
++src/app/page.tsx currently shows my media library UI (upload link, list of files, players, delete, etc.).
++
++src/app/upload/page.tsx is the upload form and posts to /api/media.
++
++/api/media and /api/media/[id] routes are working and should not be broken.
++
++There may or may not already be a /api/protected-stream route / protected media; do not change any media streaming behavior in this prompt. Focus on auth + landing.
++
++I want to add:
++
++A public landing page at / with sign-up/log-in links and a “Download the app” section.
++
++A username/email/password auth system built into the app itself.
++
++User accounts stored in an encrypted file on my machine, with passwords stored as secure hashes (Argon2).
++
++A session cookie so that /app (the actual app UI) is only accessible when logged in — regardless of whether the user got the software via my website or from a zipped copy.
++
++1. Move the library UI to /app and add a landing page /
++
++Create a new landing page at src/app/page.tsx that:
++
++Shows the app name “OnestarStream” and a short description.
++
++Has two buttons/links: “Sign up” → /auth/signup, “Log in” → /auth/signin.
++
++Has a “Download OnestarStream” section with two placeholder buttons: “Download for macOS” and “Download for Windows” that both just link to # for now.
++
++Move the existing library UI (the one that shows uploaded tracks, players, delete, etc.) out of src/app/page.tsx into a new route at src/app/app/page.tsx.
++
++/app should show exactly the same library UI as before (same functionality, same components), just under the new route.
++
++Update any “Back to home” or similar links in the upload page so that they now go to /app instead of /.
++
++Do not change any /api routes in this step; just rewire the pages so that / is the marketing/landing, and /app is the actual app.
++
++2. Encrypted user storage with hashed passwords
++
++I want a simple user account system stored in an encrypted file with hashed passwords.
++
++Data model & storage:
++4. Create a new file src/lib/userStore.ts that manages users via an encrypted file on disk:
++
++Use a file at the project root called users.enc.
++
++Define a User interface:
++
++export interface User {
++  id: string;
++  email: string;
++  username: string;
++  passwordHash: string;
++  createdAt: string;
++}
++
++
++Implement functions:
++
++async function getAllUsers(): Promise<User[]>
++
++async function getUserByEmail(email: string): Promise<User | null>
++
++async function getUserByUsername(username: string): Promise<User | null>
++
++async function getUserById(id: string): Promise<User | null>
++
++async function createUser(email: string, username: string, passwordPlain: string): Promise<User>
++
++async function verifyUser(email: string, passwordPlain: string): Promise<User | null>
++
++Encryption details:
++5. Instead of storing users.json in plaintext, store an encrypted JSON array in users.enc using Node’s crypto AES-256-GCM:
++
++Derive a 32-byte key using SHA-256 over an env var ONESTAR_USERS_KEY (with a reasonable default for dev if the env var is missing):
++
++const MASTER_PASSWORD = process.env.ONESTAR_USERS_KEY ?? 'onestar-dev-users';
++const KEY = createHash('sha256').update(MASTER_PASSWORD).digest(); // 32 bytes
++
++
++Use a 12-byte IV for GCM.
++
++File layout can be [iv][tag][ciphertext] as a single binary blob.
++
++Implement helpers inside userStore.ts:
++
++async function loadUsersEncrypted(): Promise<User[]> // returns [] if file does not exist
++async function saveUsersEncrypted(users: User[]): Promise<void>
++
++
++getAllUsers should call loadUsersEncrypted, and createUser / other mutators should call saveUsersEncrypted.
++
++Password hashing:
++6. Use argon2 for password hashing:
++
++Add dependency: argon2.
++
++In createUser, hash the plain password with argon2.hash(passwordPlain) and store passwordHash.
++
++In verifyUser, use argon2.verify(user.passwordHash, passwordPlain) to check.
++
++Never store or log plaintext passwords anywhere.
++
++3. Signup & signin API + pages
++
++Create API routes for signup and signin:
++
++src/app/api/auth/signup/route.ts
++
++src/app/api/auth/signin/route.ts
++
++Signup API (POST /api/auth/signup):
++8. Behavior:
++
++Accept JSON or form data with { email, username, password }.
++
++Validate that all fields are present and non-empty.
++
++Check that no user with that email or username already exists (case-insensitive email compare is ideal).
++
++If a duplicate exists, return 400 with a simple error message.
++
++Otherwise, call createUser(email, username, password) from userStore.ts.
++
++On success, return 201 with the new user’s public info (id, email, username, createdAt), not the password or hash.
++
++Signin API (POST /api/auth/signin):
++9. Behavior:
++
++Accept JSON or form data with { email, password }.
++
++Look up the user by email and verify password with verifyUser.
++
++If invalid, return 401.
++
++If valid, create a session and set it as an HttpOnly cookie.
++
++Session implementation:
++10. Implement a simple cookie-based session system in a new file src/lib/authSession.ts:
++- Use a JWT-like signed token or a simple signed payload containing { userId }.
++- You can use jose (or jsonwebtoken) or a small HMAC implementation with crypto – choose a simple approach that works with Next.js App Router.
++- Use an env var ONESTAR_SESSION_KEY as the signing key (again, derive a key via SHA-256).
++- Provide functions:
++ts export function createSessionCookie(userId: string): { name: string; value: string; options: CookieOptions } export async function getUserFromRequest(req: NextRequest): Promise<User | null>
++where getUserFromRequest reads the session cookie, verifies it, and loads the corresponding user from userStore.
++11. In POST /api/auth/signin, after a successful login:
++- Use createSessionCookie to generate the cookie and include it in the response.
++- Redirect or respond with a JSON success: true and let the client redirect to /app.
++
++Signup & signin pages:
++12. Create:
++- src/app/auth/signup/page.tsx
++- src/app/auth/signin/page.tsx
++
++Sign up page behavior (/auth/signup):
++13. UI:
++- Simple form with fields: Email, Username, Password.
++- On submit, POST to /api/auth/signup.
++- On success, either auto-redirect to /auth/signin or show a success message with a “Go to login” link.
++
++Sign in page behavior (/auth/signin):
++14. UI:
++- Form with Email + Password.
++- On submit, POST to /api/auth/signin.
++- On success, redirect to /app.
++- On failure, show a basic error message “Invalid credentials”.
++
++Note: simple fetch or form POST handling is fine; no need for fancy client-side state management right now.
++
++4. Guard /app behind login (regardless of how the app was obtained)
++
++I want /app and anything under /app/* to be only accessible when logged in, whether the user got the app from my website or from a zipped copy. The auth gate must live inside the app itself.
++
++Implement a simple guard using either:
++
++a middleware.ts at the project root that checks the session cookie for requests to /app and /app/(.*) and redirects to /auth/signin if no valid session, or
++
++a server layout for /app that uses getUserFromRequest (from authSession.ts) and redirects if there is no user.
++
++Preferred approach:
++16. Add middleware.ts at the root with logic like:
++- For paths starting with /app or /upload (if you want uploads guarded too), read the session cookie from the NextRequest.
++- Use getUserFromRequest to determine if there is a valid user.
++- If not, redirect to /auth/signin.
++- Do not guard /, /auth/*, or /api/auth/*.
++
++Make sure that once logged in, going to /app shows the library UI exactly as before, and going to /upload still works.
++
++5. General constraints
++
++Do not break the existing media uploading/streaming/playback behavior; /api/media and the player UI should keep working once the user is logged in.
++
++Do not change anything about how files are stored in public/media or how media.json is written in this prompt.
++
++Use TypeScript types consistently; avoid any.
++
++It’s okay to add new dependencies like argon2 and a JWT/jose lib for signing sessions.
++
++Please also update .gitignore to ignore users.enc and .env.local so sensitive data does not get committed.
++
++After implementing, please summarize:
++
++Which files you added/changed,
++
++How user signup, signin, and session cookies work,
++
++How /app is now protected,
++
++And exactly where users’ data is stored (the encrypted file path) and how passwords are hashed.
+
+# 2025-11-23 16:19:26.065987
++y
+
+# 2025-11-23 16:37:42.153853
++cd ~/projects/onestarstream
++aider \
++  src/app/page.tsx \
++  src/app/app/page.tsx \
++  src/app/upload/page.tsx \
++  src/lib/mediaStore.ts \
++  src/lib/userStore.ts \
++  src/lib/authSession.ts \
++  src/app/auth/signup/page.tsx \
++  src/app/auth/signin/page.tsx \
++  src/app/api/media/route.ts \
++  middleware.ts
++You are working on my Next.js 16 App Router project OnestarStream.
++
++Current important behavior (do not break):
++
++src/lib/mediaStore.ts is working and must be preserved. It:
++
++Stores media files under public/media.
++
++Stores metadata in media.json.
++
++/app (in src/app/app/page.tsx) shows my media library UI (upload link, list of files, players, delete, etc.).
++
++/upload (in src/app/upload/page.tsx) is the upload form that posts to /api/media.
++
++/ (in src/app/page.tsx) is a simple landing page with “Sign up” and “Log in” links pointing to /auth/signup and /auth/signin.
++
++src/app/auth/signup/page.tsx and src/app/auth/signin/page.tsx exist but are currently just placeholders.
++
++There is a middleware.ts file, but you are allowed to rewrite it as long as you keep guarding /app and /upload the way described below.
++
++I want real auth now:
++
++Users sign up with email + username + password.
++
++User records are stored in an encrypted file on disk (users.enc) using AES-256-GCM.
++
++Passwords are stored as Argon2 hashes, never in plaintext.
++
++A session cookie is set on login, and /app + /upload are only accessible when logged in.
++
++This must be enforced inside the app itself, so even if someone just gets a zip of the project and runs it, they still have to sign up / log in to use /app.
++
++1. Encrypted user store with Argon2 password hashes
++
++Create or replace src/lib/userStore.ts with a JSON-like encrypted store on top of users.enc in the project root.
++
++Define the user model:
++
++export interface User {
++  id: string;
++  email: string;
++  username: string;
++  passwordHash: string;
++  createdAt: string;
++}
++
++
++Implement these functions in userStore.ts:
++
++export async function getAllUsers(): Promise<User[]>;
++export async function getUserByEmail(email: string): Promise<User | null>;
++export async function getUserByUsername(username: string): Promise<User | null>;
++export async function getUserById(id: string): Promise<User | null>;
++export async function createUser(email: string, username: string, passwordPlain: string): Promise<User>;
++export async function verifyUser(email: string, passwordPlain: string): Promise<User | null>;
++
++
++Use an encrypted file users.enc instead of plaintext JSON:
++
++At the top of userStore.ts, set:
++
++const USERS_ENC_PATH = path.join(process.cwd(), 'users.enc');
++const MASTER_PASSWORD = process.env.ONESTAR_USERS_KEY ?? 'onestar-dev-users';
++const KEY = createHash('sha256').update(MASTER_PASSWORD).digest(); // 32 bytes
++const IV_LENGTH = 12; // for AES-256-GCM
++
++
++Implement:
++
++async function loadUsersEncrypted(): Promise<User[]>; // returns [] if file doesn’t exist
++async function saveUsersEncrypted(users: User[]): Promise<void>;
++
++
++Use AES-256-GCM from Node’s crypto:
++
++When writing, generate a random 12-byte IV, encrypt the JSON bytes, get the auth tag, and write [iv][tag][ciphertext] to users.enc.
++
++When reading, parse [iv][tag][ciphertext] and decrypt using the same key + iv + tag.
++
++Use Argon2 for password hashing:
++
++Import argon2 in userStore.ts: import argon2 from 'argon2';.
++
++In createUser, hash the password with await argon2.hash(passwordPlain) and store the result as passwordHash.
++
++In verifyUser, look up the user by email and await argon2.verify(user.passwordHash, passwordPlain).
++
++Never store or log plaintext passwords.
++
++getAllUsers should call loadUsersEncrypted, and mutating functions (createUser) should call saveUsersEncrypted. If users.enc doesn’t exist, loadUsersEncrypted should return an empty array.
++
++Important: userStore.ts must only use Node APIs (fs, crypto) and must not be imported from Edge runtimes (like middleware). We’ll handle that below by keeping middleware simple.
++
++Also:
++7. Add argon2 as a dependency in package.json (do not remove existing deps). I will run npm install myself.
++
++2. Session handling (authSession.ts) using a signed cookie
++
++Implement session helpers in a new file src/lib/authSession.ts to work with a simple signed token stored in a cookie.
++
++Use an env var ONESTAR_SESSION_KEY as the signing key:
++
++const SESSION_SECRET = process.env.ONESTAR_SESSION_KEY ?? 'onestar-dev-session';
++const SESSION_COOKIE_NAME = 'onestar_session';
++
++
++Derive a 32-byte key from SESSION_SECRET with SHA-256 like you did for the user key.
++
++Implement helpers such as:
++
++export interface SessionPayload { userId: string; iat: number; }
++
++export function createSessionToken(userId: string): string;
++export function verifySessionToken(token: string): SessionPayload | null;
++export function getSessionCookieName(): string;
++
++
++createSessionToken should create a small JSON payload { userId, iat }, stringify it, and sign it with HMAC-SHA256 using the session key. You can use a compact format like base64url(payload) + "." + base64url(signature).
++
++verifySessionToken should split the token, recompute the signature with HMAC-SHA256, and if it matches, return the parsed payload; otherwise return null.
++
++Also export:
++
++import type { NextRequest } from 'next/server';
++import type { User } from './userStore';
++
++export async function getUserFromRequest(req: NextRequest): Promise<User | null>;
++
++
++getUserFromRequest should read the onestar_session cookie from the request, verify the token with verifySessionToken, and if valid, use getUserById from userStore.ts to return the user, else null.
++
++Important: authSession.ts is allowed to import userStore.ts, but must not be imported from middleware.ts (Edge). It should only be used in Node runtimes (API routes or server components where runtime = 'nodejs').
++
++3. Signup & signin API routes
++
++Create src/app/api/auth/signup/route.ts and src/app/api/auth/signin/route.ts. Both should explicitly set:
++
++export const runtime = 'nodejs';
++
++
++so they run in the Node.js runtime (where fs, crypto, and argon2 are allowed).
++
++Signup API (POST /api/auth/signup):
++12. Behavior:
++- Accept JSON body { email, username, password }. It’s okay to also accept form data, but JSON is fine for now.
++- Validate that email, username, and password are non-empty strings.
++- Use getUserByEmail and getUserByUsername to ensure no duplicates (case-insensitive email comparison is ideal, but simple match is OK for MVP).
++- If a duplicate exists, return 400 with a simple JSON error { error: 'Email already in use' } or similar.
++- Otherwise, call createUser(email, username, password).
++- Return 201 with a JSON object containing only public fields: id, email, username, createdAt. Do not return passwordHash.
++
++Signin API (POST /api/auth/signin):
++13. Behavior:
++- Accept JSON body { email, password }.
++- Use verifyUser(email, password).
++- If invalid credentials, return 401 with { error: 'Invalid credentials' }.
++- If valid:
++- Generate a session token with createSessionToken(user.id).
++- Set this in a Set-Cookie header as onestar_session=<token> with:
++- httpOnly: true
++- sameSite: 'lax'
++- path: '/'
++- Return 200 with { success: true }. The client can then redirect to /app.
++
++4. Wire the signup/signin pages to these APIs
++
++Update src/app/auth/signup/page.tsx to be a Client Component with a real form:
++
++Add 'use client'; at the top.
++
++Form fields: email, username, password.
++
++On submit, preventDefault, send a fetch('/api/auth/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, username, password }) }).
++
++If success (status 201), either:
++
++show “Account created, go to login” with a link to /auth/signin, or
++
++automatically redirect to /auth/signin using useRouter().push('/auth/signin').
++
++If error, display a simple error message from the JSON.
++
++Update src/app/auth/signin/page.tsx similarly ('use client'; at top):
++
++Form fields: email, password.
++
++On submit, send a POST to /api/auth/signin with JSON { email, password }.
++
++If success, redirect to /app.
++
++If error, show “Invalid credentials” (or the error from the response).
++
++Note: These auth pages are client components; that’s fine. Just make sure the landing page at / (src/app/page.tsx) remains a server component with simple <Link>s to /auth/signup and /auth/signin (no onClick navigation there).
++
++5. Guard /app and /upload behind login with middleware
++
++Rewrite middleware.ts so that it does not import userStore or authSession (Edge middleware cannot use fs/crypto/argon2). Instead, it should be a minimal check for the session cookie.
++
++middleware.ts should:
++
++Import { NextRequest, NextResponse } from 'next/server'.
++
++Define const SESSION_COOKIE_NAME = 'onestar_session';.
++
++Define a list of protected prefixes: ['/app', '/upload'].
++
++For incoming requests:
++
++const { pathname } = req.nextUrl;
++const needsAuth = PROTECTED_PREFIXES.some(
++  (prefix) => pathname === prefix || pathname.startsWith(prefix + '/')
++);
++if (!needsAuth) return NextResponse.next();
++const sessionCookie = req.cookies.get(SESSION_COOKIE_NAME);
++if (!sessionCookie) {
++  const loginUrl = new URL('/auth/signin', req.nextUrl.origin);
++  loginUrl.searchParams.set('from', pathname);
++  return NextResponse.redirect(loginUrl);
++}
++return NextResponse.next();
++
++
++Export config with a matcher that matches /app/:path* and /upload/:path*.
++
++Do not import authSession or userStore in middleware; deeper APIs/pages can verify the token in more detail if needed.
++
++Result:
++
++/app and /upload will only be reachable when the browser has an onestar_session cookie; if not, user is redirected to /auth/signin.
++
++This is true regardless of whether they downloaded the app from the website or got a zip. The auth gate lives inside the app.
++
++6. Constraints and safety
++
++Do not modify src/lib/mediaStore.ts or /api/media behavior in this prompt; all media upload/playback must continue to work once logged in.
++
++Keep all media-related routes (/api/media, /app, /upload) functioning as they do now.
++
++Use TypeScript types, avoid any.
++
++Make sure you don’t use fs, crypto, or argon2 from Edge runtimes (middleware); they must stay in Node-only modules and routes.
++
++Update .gitignore to include users.enc and .env.local if they are not already ignored.
++
++After you finish, please summarize:
++
++Which files you added/changed.
++
++How users.enc is structured and secured (key derivation, AES-GCM).
++
++How signup & signin work end-to-end (including where password hashing happens).
++
++How the session cookie is created and how /app + /upload are now protected.
+
+# 2025-11-23 16:37:45.800752
++y
+
+# 2025-11-23 17:07:06.478924
++You are working on my Next.js 16 app OnestarStream.
++
++Current behavior (don’t break):
++
++src/app/app/page.tsx is my main logged-in “library” page.
++
++It already has a header with an Upload link that points to /upload.
++
++The rest of the page (list of media, players, etc.) is working and must not change in behavior.
++
++Goal:
++Add a simple menu option for Library in the same header/nav area where the Upload link is, so that:
++
++There is a visible “Library” link that points to /app.
++
++The existing “Upload” link stays and still points to /upload.
++
++Styling should be consistent with the existing header style (same font/spacing vibe as the Upload link).
++
++Implementation details:
++
++If the file is currently using a plain <a href="/upload"> for Upload, just add another <a href="/app">Library</a> next to it.
++
++If it’s already using next/link, use <Link href="/app">Library</Link> alongside the Upload <Link>.
++
++Do not remove or rename the Upload link.
++
++Do not change any of the media list / player logic below the header.
++
++After the change, the header should clearly show both:
++
++“Library” (link to /app)
++
++“Upload” (link to /upload).
+
+# 2025-11-23 17:08:39.012651
++/exit
+
+# 2025-11-23 17:10:43.393153
++n
+
+# 2025-11-23 18:42:15.209489
++I want to add an encrypted export/import system for sending tracks between users without networking.
++
++Please update the project with these changes:
++
++1. In src/lib/mediaStore.ts:
++   - Add two new functions:
++     A) exportEncryptedMedia(id: string): Promise<Buffer>
++        • Loads a media item by ID
++        • Reads the media file
++        • Creates an encrypted binary package containing:
++            { meta: MediaItem, contents: Buffer }
++        • Encrypt using AES-256-GCM with ONESTAR_USERS_KEY from .env.local
++        • Return the encrypted Buffer
++
++     B) importEncryptedMedia(pkg: Buffer): Promise<MediaItem>
++        • Decrypts the package with AES-256-GCM
++        • Restores the media file into the local MEDIA_DIR
++        • Adds the MediaItem to media.json
++        • Returns the imported MediaItem
++
++2. In src/app/api/media/[id]/route.ts:
++   - Add a new route handler: GET /api/media/[id]/export
++   - Calls exportEncryptedMedia() and returns the binary as an application/octet-stream download
++
++3. In the UI:
++   - In the track list (where delete button is):
++     Add an "Export" button next to each track.
++     The button should:
++        • call /api/media/[id]/export
++        • download a file named: <title>.onestar
++
++4. Add an “Import Track” button in the /app page:
++   - It opens a file picker for *.onestar files
++   - Uploads the file to a new API route: POST /api/media/import
++   - That route:
++        • reads the uploaded file
++        • calls importEncryptedMedia()
++        • returns the new MediaItem
++
++5. The imported track should appear in the user’s library immediately, stored locally in the sandbox, with no download button unless the user enabled that permission.
++
++Please modify only the necessary files and keep all changes small and incremental.
++
+
+# 2025-11-23 18:42:19.671750
++y
+
+# 2025-11-23 18:51:13.997428
++I want to add encrypted, serverless track sharing between OnestarStream users.
++
++Please implement the following system inside my existing Next.js + Electron project in small incremental steps:
++
++────────────────────────────────────────
++1. ADD SERVERLESS STORAGE BACKEND (VERCEL)
++────────────────────────────────────────
++
++Create a storage wrapper in `src/lib/relayStore.ts` that uses:
++
++• Vercel KV for metadata:
++  - users
++  - inbox indexes
++  - message pointers
++
++• Vercel Blob for encrypted payloads:
++  - store encrypted .onestar files
++  - never raw audio
++
++The store must expose:
++
++- createUser(email, username, passwordHash)
++- getUserByEmail(email)
++- getUserByUsername(username)
++- saveMessage(toUserId, blobUrl, meta)
++- listMessages(userId)
++- consumeMessage(userId, messageId)
++
++────────────────────────────────────────
++2. ADD ENCRYPTION HELPERS
++────────────────────────────────────────
++
++In `src/lib/encryption.ts`, add:
++
++- encryptPackage(meta: MediaItem, contents: Buffer, recipientPublicKey?)
++- decryptPackage(pkg: Buffer)
++
++Use AES-256-GCM with ONESTAR_USERS_KEY from .env.local.
++
++Resulting encrypted packages should be `.onestar` binary files containing:
++{
++  meta: MediaItem,
++  contents: Buffer,
++  permissions: { allowDownload: boolean },
++}
++
++────────────────────────────────────────
++3. SERVERLESS API ROUTES
++────────────────────────────────────────
++
++Create these new Next.js API routes:
++
++- POST /api/relay/signup
++  Creates user in KV
++
++- POST /api/relay/signin
++  Returns a signed relayToken for use in sharing
++
++- POST /api/relay/send
++  Request body:
++    {
++      relayToken,
++      recipient,
++      encryptedPackageBinary
++    }
++  Stores encrypted blob in Vercel Blob
++  Writes message entry in KV
++
++- GET /api/relay/inbox
++  Request header:
++    Authorization: Bearer <relayToken>
++  Returns list of inbox items:
++    { messageId, blobUrl, meta }
++
++- POST /api/relay/consume
++  Deletes mailbox entry
++  Deletes blob
++
++────────────────────────────────────────
++4. ELECTRON / CLIENT-SIDE INTEGRATION
++────────────────────────────────────────
++
++Add the following UI + logic:
++
++A) In the track list, add a “Share Track” button.
++   - Prompts for recipient username
++   - Prompts for “Allow download?” toggle
++   - Calls encryptPackage() on the media file
++   - Uploads to /api/relay/send
++
++B) Add background polling every 5 seconds:
++   - GET /api/relay/inbox
++   - For each message:
++        • download the encrypted blob
++        • decryptPackage()
++        • import into local library
++        • POST /api/relay/consume
++
++C) Add an inbox indicator in the app’s UI.
++
++────────────────────────────────────────
++5. SAFETY + INTEGRITY
++────────────────────────────────────────
++
++- Never send raw media to the server.
++- All blobs are encrypted before upload.
++- API must validate relayToken on every call.
++- Imported tracks should behave exactly like locally-uploaded tracks.
++- Share permissions (allowDownload) must be stored and honored.
++
++────────────────────────────────────────
++6. IMPLEMENT IN SMALL CHUNKS
++────────────────────────────────────────
++
++Do NOT modify everything at once.
++
++Implement each part step by step:
++
++1. Create relayStore.ts
++2. Create encryption.ts
++3. Create signup/signin routes
++4. Create send/inbox/consume routes
++5. Wire inbox polling
++6. Wire share track button
++7. Wire import to library
++
++Ask me before making breaking changes.
++
+
+# 2025-11-23 18:51:44.907723
++y
+
+# 2025-11-23 18:57:03.203214
++cd ~/projects/onestarstream
++git log --oneline
++/exit
+
+# 2025-11-23 18:57:21.226143
++y
+
+# 2025-11-23 18:57:30.650665
++/exit
+
+# 2025-11-23 19:23:32.519138
++I need to undo all changes made after commit 8efd287 and restore the project 
++to the last fully working state.
++
++Please run:
++
++git reset --hard 8efd287
++
++After resetting, DO NOT add any new features. 
++DO NOT add encryption, import/export, relayStore, Vercel KV, or blob storage.
++
++Only confirm that the repo is now restored to the working state with:
++- signup/signin functional
++- upload working
++- playback working
++- delete working
++- library page working
++- Electron window opens correctly
++
++After confirming, STOP. No further edits.
++
+
+# 2025-11-23 19:23:51.893091
++y
+
+# 2025-11-23 19:39:09.363389
++/exit
+
+# 2025-11-23 20:14:58.784975
++You are modifying an existing Next.js + Electron project. I reset some commits and now need to restore and finish the whole encrypted peer-to-peer track sharing system we previously attempted.
++
++Follow these rules:
++- Make small, incremental changes
++- Only modify the specific files needed
++- Continue asking questions if something is ambiguous
++- Do NOT rewrite the whole repo
++- Keep everything serverless and local-first
++
++────────────────────────────────
++ARCHITECTURE REQUIREMENTS
++────────────────────────────────
++
++STORAGE MODEL:
++- Protected tracks must be stored in:
++  Electron.app.getPath("userData") + "/protected-media"
++
++ENCRYPTION MODEL:
++- AES-256-GCM
++- JSON wrapper { meta, contents }
++- A single local master key stored in:
++  userData/encryption_key
++- Keys created once per device
++
++USER IDENTITY:
++- Each device generates:
++  /userData/identity_private.pem
++  /userData/identity_public.pem
++- Used for signing outgoing messages
++- Incoming messages must verify signature
++
++P2P SYSTEM (NO SERVER ALLOWED):
++We simulate a "relay" using encrypted .onestar packages.  
++The flow:
++
++1. Sender chooses a track → clicks “Send to user”
++2. App encrypts metadata + media file into a .onestar package
++3. App asks for recipient’s username
++4. The encrypted package is written to:
++   ~/OneStarStream/relay_outbox/<recipient>/<file>.onestar
++5. The receiving user periodically polls:
++   ~/OneStarStream/relay_inbox/<their_username>/
++6. When a file appears, they click “Sync Inbox”
++7. App verifies signature → decrypts → imports to protected media
++
++We need:
++- relayStore.ts (local pseudo-mailboxes)
++- encryption.ts (AES-GCM helper)
++- identity.ts (Ed25519 signing + key storage)
++- Updated mediaStore.ts to support protected imports
++- API:
++  - POST /api/media/export
++  - POST /api/media/import
++  - POST /api/share/send
++  - GET /api/share/inbox
++
++UI changes:
++- Add “Send Track” button next to Export/Delete
++- Add “Inbox” page with “Sync Inbox” button
++- Add “Import Track” button in Library
++- Add “Export .onestar” button
++
++────────────────────────────────
++FILES TO CREATE OR UPDATE
++────────────────────────────────
++
++CREATE:
++- src/lib/encryption.ts
++- src/lib/identity.ts
++- src/lib/relayStore.ts
++- src/app/api/share/send/route.ts
++- src/app/api/share/inbox/route.ts
++
++UPDATE:
++- src/lib/mediaStore.ts
++- src/app/app/page.tsx (library page)
++- src/app/auth/signup/page.tsx
++- src/app/auth/signin/page.tsx
++- src/app/upload/page.tsx
++- electron/main.js (ensure userData paths exist)
++
++────────────────────────────────
++GOAL
++────────────────────────────────
++Make the entire P2P encrypted track-sharing system fully functional:
++- Local-only, serverless
++- No cloud dependencies
++- Protected tracks enforced
++- User accounts offline
++- Tracks can be exported, imported, and sent P2P
++- Inbox works without servers
++- Everything builds in Next.js + Electron
++
++Begin by asking me any questions you need about file paths or UX.
++Then start implementing the system in small commits.
++
+
+# 2025-11-23 20:15:13.798889
++y
+
+# 2025-11-23 20:15:54.606576
++/exit
+
+# 2025-11-23 20:19:13.552923
++Aider, you are reconstructing and fixing the final feature attempt of a Next.js + Electron local-first application called OneStarStream.
++The repo was hard-reset, so three commits were lost:
++
++21d4936 feat: add encrypted export/import system for media tracks between users
++f053b39 feat: add serverless storage wrapper using Vercel KV and Blob
++c0f237a feat: add encryption and decryption functions for media packages
++
++
++Your task is to fully RECREATE these three commits’ functionality, FIX them, and INTEGRATE them so the entire feature stack works offline and correctly.
++
++🔧 REQUIRED FEATURES (MUST BE IMPLEMENTED)
++
++Aider must reconstruct and fix:
++
++1. Encryption / Decryption (password-based AES-256)
++
++Create src/lib/encryption.ts
++
++Provide functions:
++
++encryptMedia(data: Uint8Array, password: string)
++
++decryptMedia(encrypted: Uint8Array, password: string)
++
++createOnestarPackage(metadata, encryptedBytes)
++
++parseOnestarPackage(buffer)
++
++2. Local Relay Store (cloud-style API but 100% offline)
++
++Recreate src/lib/relayStore.ts
++
++Provide an API shaped like a KV + Blob store:
++
++uploadEncryptedTrack(id, encryptedBytes)
++
++downloadEncryptedTrack(id)
++
++saveMetadata(id, metadata)
++
++loadMetadata(id)
++
++Implement this locally using filesystem storage, NOT cloud.
++
++3. Import/Export UI
++
++Recreate the version of src/app/page.tsx that existed in commit 21d4936:
++
++Add “Export Track” button
++
++Add “Import .onestar” button
++
++Add file-picker for importing
++
++Integrate with encryption + relayStore
++
++Display progress / status
++
++Work inside Next.js App Router
++
++4. Integration with Existing Local Media System
++
++Aider must ensure the reconstructed feature stack works with:
++
++src/lib/mediaStore.ts
++
++src/lib/userStore.ts
++
++src/lib/authSession.ts
++
++All existing upload / stream API routes
++
++Electron IPC (if referenced)
++
++5. NO CLOUD DEPENDENCIES
++
++No Vercel KV
++
++No Blob storage
++
++No internet access
++
++Entire feature must run offline
++
++6. DON’T CHANGE UNRELATED FILES
++
++Only modify:
++
++src/app/page.tsx
++src/lib/encryption.ts
++src/lib/relayStore.ts
++
++
++Unless integrating requires minimal adjustments elsewhere.
++
++If integration requires updates, Aider must ask before modifying other files.
++
++📁 FILE RECONSTRUCTION RULES
++
++Aider must:
++
++Recreate the missing files even if they don’t exist
++
++Write complete working implementations
++
++Maintain consistent TypeScript types
++
++Use async/await
++
++Ensure Electron compatibility
++
++Save encrypted bytes in a localdata/ folder inside the project root
++
++🚀 GOAL
++
++After these files are created and integrated:
++
++.onestar encrypted packages can be exported
++
++.onestar packages can be imported
++
++Tracks can be encrypted/decrypted locally
++
++Files can be stored and retrieved offline
++
++The homepage UI fully works
++
++The app runs successfully in both Next.js & Electron
++
++No cloud errors appear
+
+# 2025-11-23 20:19:16.839640
++y
+
+# 2025-11-23 20:19:40.704432
++“Add the three missing files.”
+
+# 2025-11-23 20:22:27.803253
++edit: src/app/auth/signin/page.tsx
++
++Move `'use client';` to the top of the file as the very first line. Do not modify anything else.
++
+
+# 2025-11-23 20:23:45.160095
++edit: src/app/auth/signin/page.tsx
++
++Rewrite this file so that:
++1. 'use client'; is the first line in the file.
++2. There is only ONE default export: `export default function SigninPage() { ... }`
++3. Remove any duplicate component definitions or leftover code.
++
++Keep the same functionality, but ensure the file is a clean single client component.
++
+
+# 2025-11-23 20:26:47.561120
++edit: src/app/page.tsx
++
++Rewrite this file so that:
++1. 'use client'; is the very first line in the file.
++2. All imports come directly after that line.
++3. The file contains exactly ONE React component export.
++4. Remove any duplicate code that may appear before or after 'use client'.
++
++Do NOT change the UI or logic except what is required to fix the client-component structure.
++
+
+# 2025-11-23 20:28:06.286693
++edit: src/lib/encryption.ts
++
++Make this file server-only by adding 'use server'; at the very top.
++Remove any duplicate constant declarations.
++Ensure it exports clean server functions:
++- encryptMedia(buffer: Uint8Array, password: string)
++- decryptMedia(buffer: Uint8Array, password: string)
++- createOnestarPackage(metadata: any, encryptedBytes: Uint8Array)
++- parseOnestarPackage(buffer: ArrayBuffer)
++
++Do NOT attempt to make this client-safe. It must only run on the server.
++
+
+# 2025-11-23 20:28:25.597816
++edit: src/app/page.tsx
++
++Remove all direct imports from '../lib/encryption'.
++Instead, create server actions:
++- import { encryptMediaAction, decryptMediaAction, exportPackageAction, importPackageAction } from './actions';
++
++And replace the old calls with these server actions.
++
++Do not change UI or logic, just route encryption through server actions so the client never loads Node crypto.
++
+
+# 2025-11-23 20:30:27.473743
++edit: src/lib/relayStore.ts
++
++Add 'use server'; as the first line of the file.
++
++Ensure the module is server-only and remove any duplicate constant declarations such as METADATA_DIR.
++
++Keep these exported functions exactly:
++- uploadEncryptedTrack(id: string, encrypted: Uint8Array)
++- downloadEncryptedTrack(id: string)
++- saveMetadata(id: string, metadata: any)
++- loadMetadata(id: string)
++
++DO NOT allow this file to be imported by client components anymore.
++
+
+# 2025-11-23 20:30:48.681186
++edit: src/app/page.tsx
++
++Remove all direct imports from '../lib/relayStore'.
++
++Instead create server actions in a new file:
++src/app/actions.ts
++
++Actions to create:
++- uploadEncryptedTrackAction
++- downloadEncryptedTrackAction
++- saveMetadataAction
++- loadMetadataAction
++- exportPackageAction
++- importPackageAction
++
++Replace all relayStore and encryption calls in page.tsx with calls to these server actions.
++
++Do not change the UI or core logic — simply route everything through server actions so the client never loads server-only modules.
++
+
+# 2025-11-23 20:30:59.823800
++y
+
+# 2025-11-23 20:32:49.509239
++edit: src/app/page.tsx
++
++Remove the duplicate imports.
++Replace the two separate imports from './actions' with ONE single import:
++
++import {
++  encryptMediaAction,
++  decryptMediaAction,
++  exportPackageAction,
++  importPackageAction,
++  uploadEncryptedTrackAction,
++  downloadEncryptedTrackAction,
++  saveMetadataAction,
++  loadMetadataAction
++} from './actions';
++
++Do not change anything else in the file.
++
+
+# 2025-11-23 20:33:45.596522
++edit: src/app/actions.ts
++
++Fix architecture so encryption.ts functions are not treated as server actions.
++
++1. Remove any `export` statements that re-export functions imported from '../lib/encryption'.
++2. Wrap each encryption function in its own async server action like this:
++
++'use server';
++import { encryptMedia, decryptMedia, createOnestarPackage, parseOnestarPackage } from '../lib/encryption';
++
++export async function encryptMediaAction(buffer, password) {
++  return encryptMedia(buffer, password);
++}
++
++export async function decryptMediaAction(buffer, password) {
++  return decryptMedia(buffer, password);
++}
++
++export async function exportPackageAction(meta, encryptedBytes) {
++  return createOnestarPackage(meta, encryptedBytes);
++}
++
++export async function importPackageAction(buffer) {
++  return parseOnestarPackage(buffer);
++}
++
++3. Do NOT modify encryption.ts.
++4. Ensure ONLY the wrapper functions are exported as server actions.
++
+
+# 2025-11-23 20:34:29.051549
++edit: src/lib/encryption.ts
++
++Add 'use server'; at the top of the file if it is not there.
++
++Do NOT mark any exported functions as server actions.
++Do NOT make parseOnestarPackage async.
++
++This file must remain a pure server-only utility module.
++
+
+# 2025-11-23 20:36:07.910963
++edit: src/app/actions.ts
++
++Rewrite this file so it is a *pure server-only* module.
++
++Rules:
++1. The FIRST line must be exactly: 'use server';
++2. After that line, import ONLY server utilities:
++   import { encryptMedia, decryptMedia, createOnestarPackage, parseOnestarPackage } from '../lib/encryption';
++   import { uploadEncryptedTrack, downloadEncryptedTrack, saveMetadata, loadMetadata } from '../lib/relayStore';
++3. Do NOT import React, useState, or anything client-side.
++4. Export ONLY async server action wrappers, like:
++
++export async function encryptMediaAction(buffer, password) {
++  return encryptMedia(buffer, password);
++}
++
++export async function uploadEncryptedTrackAction(id, bytes) {
++  return uploadEncryptedTrack(id, bytes);
++}
++
++...and so on...
++
++5. DO NOT re-export the raw functions. Only wrap them.
++6. Ensure there are NO duplicate imports or duplicate exports.
++7. Ensure there is NO circular import with page.tsx.
++
++Do not change logic, only ensure clean server action structure.
++
+
+# 2025-11-23 20:36:22.038487
++edit: src/lib/relayStore.ts
++
++Clean this file so that:
++1. 'use server'; is the first line.
++2. All imports (fs/promises, path) appear exactly once, at the top.
++3. Constants (RELAY_OUTBOX_DIR, RELAY_INBOX_DIR, METADATA_DIR) appear exactly once.
++4. Helper functions (ensureDirectories) appear exactly once.
++5. Exported functions (uploadEncryptedTrack, downloadEncryptedTrack, saveMetadata, loadMetadata) appear exactly once.
++6. Remove any accidental duplicated code blocks generated earlier.
++
++Do not change logic; only deduplicate and clean structure.
++
+
+# 2025-11-23 20:36:53.821145
++edit: src/lib/encryption.ts
++
++Clean this file so that:
++1. 'use server'; is the first line.
++2. Imports (createCipheriv, createDecipheriv, randomBytes) appear exactly once.
++3. Constants (ALGORITHM, IV_LENGTH, KEY_LENGTH) appear exactly once.
++4. Exported functions appear exactly once:
++   - encryptMedia
++   - decryptMedia
++   - createOnestarPackage
++   - parseOnestarPackage
++5. Remove any duplicated sections.
++
++Do not change function logic.
++
+
+# 2025-11-23 20:38:47.450430
++rename: src/lib/encryption.ts -> src/server/encryption.ts
++rename: src/lib/relayStore.ts -> src/server/relayStore.ts
++
+
+# 2025-11-23 20:39:04.911682
++y
+
+# 2025-11-23 20:39:04.918681
++/run git mv src/lib/encryption.ts src/server/encryption.ts
+
+# 2025-11-23 20:39:04.918841
++/run git mv src/lib/encryption.ts src/server/encryption.ts
+
+# 2025-11-23 20:39:05.068776
++/run git mv src/lib/relayStore.ts src/server/relayStore.ts
+
+# 2025-11-23 20:39:05.069059
++/run git mv src/lib/relayStore.ts src/server/relayStore.ts
+
+# 2025-11-23 20:39:13.274550
++n
+
+# 2025-11-23 20:39:20.556646
++edit: src/app/actions.ts
++
++Update imports to:
++
++import { encryptMedia, decryptMedia, createOnestarPackage, parseOnestarPackage } from '../server/encryption';
++import { uploadEncryptedTrack, downloadEncryptedTrack, saveMetadata, loadMetadata } from '../server/relayStore';
++
+
+# 2025-11-23 20:39:41.382122
++rename: src/lib/encryption.ts -> src/server/encryption.ts
++rename: src/lib/relayStore.ts -> src/server/relayStore.ts
++
+
+# 2025-11-23 20:40:17.891047
++/run git mv src/lib/encryption.ts src/server/encryption.ts
+
+# 2025-11-23 20:40:17.891392
++/run git mv src/lib/encryption.ts src/server/encryption.ts
+
+# 2025-11-23 20:40:18.034009
++/run git mv src/lib/relayStore.ts src/server/relayStore.ts
+
+# 2025-11-23 20:40:18.034190
++/run git mv src/lib/relayStore.ts src/server/relayStore.ts
+
+# 2025-11-23 20:40:25.356417
++n
+
+# 2025-11-23 20:40:35.701281
++edit: src/app/actions.ts
++(update imports exactly as above)
++
+
+# 2025-11-23 20:44:11.111814
++mkdir: src/server
++rename: src/lib/encryption.ts -> src/server/encryption.ts
++rename: src/lib/relayStore.ts -> src/server/relayStore.ts
++edit: src/app/actions.ts
++
++Replace the imports at the top with:
++
++'use server';
++
++import {
++  encryptMedia,
++  decryptMedia,
++  createOnestarPackage,
++  parseOnestarPackage
++} from '../server/encryption';
++
++import {
++  uploadEncryptedTrack,
++  downloadEncryptedTrack,
++  saveMetadata,
++  loadMetadata
++} from '../server/relayStore';
++
+
+# 2025-11-23 20:44:24.437620
++y
+
+# 2025-11-23 20:44:24.442246
++/run mkdir -p src/server
+
+# 2025-11-23 20:44:24.442368
++/run mkdir -p src/server
+
+# 2025-11-23 20:44:24.566478
++/run git mv src/lib/encryption.ts src/server/encryption.ts
+
+# 2025-11-23 20:44:24.566663
++/run git mv src/lib/encryption.ts src/server/encryption.ts
+
+# 2025-11-23 20:44:24.705275
++/run git mv src/lib/relayStore.ts src/server/relayStore.ts
+
+# 2025-11-23 20:44:24.705497
++/run git mv src/lib/relayStore.ts src/server/relayStore.ts
+
+# 2025-11-23 20:45:42.844420
++edit: src/app/actions.ts
++
++Rewrite the file header so that:
++
++1. The VERY FIRST line is exactly:
++'use server';
++
++2. There must be NO blank lines, NO comments, and NO imports before this line.
++
++3. Immediately after that line, add the correct imports:
++
++import {
++  encryptMedia,
++  decryptMedia,
++  createOnestarPackage,
++  parseOnestarPackage
++} from '../server/encryption';
++
++import {
++  uploadEncryptedTrack,
++  downloadEncryptedTrack,
++  saveMetadata,
++  loadMetadata
++} from '../server/relayStore';
++
++4. Ensure there are NO duplicate imports or exports.
++5. Do NOT modify the server action wrappers or function bodies.
++
+
+# 2025-11-23 20:47:31.257887
++delete: src/lib/encryption.ts
++delete: src/lib/relayStore.ts
++
+
+# 2025-11-23 20:48:02.358872
++y
+
+# 2025-11-23 20:50:11.091028
++d
+
+# 2025-11-23 20:50:14.098893
++y
+
+# 2025-11-23 20:51:26.674299
++edit: src/app/actions.ts
++
++Rewrite all imports so that:
++1. REMOVE all top-level imports of encryption and relayStore.
++2. Each server action uses dynamic import INSIDE the function:
++
++export async function encryptMediaAction(buffer, password) {
++  const { encryptMedia } = await import('../server/encryption');
++  return encryptMedia(buffer, password);
++}
++
++export async function decryptMediaAction(buffer, password, iv, authTag) {
++  const { decryptMedia } = await import('../server/encryption');
++  return decryptMedia(buffer, password, iv, authTag);
++}
++
++export async function exportPackageAction(meta, encryptedBytes) {
++  const { createOnestarPackage } = await import('../server/encryption');
++  return createOnestarPackage(meta, encryptedBytes);
++}
++
++export async function importPackageAction(buffer) {
++  const { parseOnestarPackage } = await import('../server/encryption');
++  return parseOnestarPackage(buffer);
++}
++
++export async function uploadEncryptedTrackAction(id, bytes) {
++  const { uploadEncryptedTrack } = await import('../server/relayStore');
++  return uploadEncryptedTrack(id, bytes);
++}
++
++...repeat for all relayStore actions...
++
++3. Ensure 'use server'; is the FIRST LINE of the file.
++
+
+# 2025-11-23 20:54:00.997787
++edit: src/app/page.tsx
++
++Remove any imports from '../server/encryption', '../lib/encryption', '../server/relayStore', or '../lib/relayStore'.
++
++Ensure ONLY server actions are imported, like:
++
++import {
++  encryptMediaAction,
++  decryptMediaAction,
++  exportPackageAction,
++  importPackageAction,
++  uploadEncryptedTrackAction,
++  downloadEncryptedTrackAction,
++  saveMetadataAction,
++  loadMetadataAction
++} from './actions';
++
+
+# 2025-11-23 20:54:17.200214
++edit: src/app/app/page.tsx
++
++Apply the same cleanup:
++Remove all imports from encryption.ts or relayStore.ts.
++Import ONLY server actions instead.
++
+
+# 2025-11-23 20:56:23.595212
++edit: src/app/page.tsx
++
++Remove ALL imports from:
++- '../server/encryption'
++- '../lib/encryption'
++- '../server/relayStore'
++- '../lib/relayStore'
++
++The ONLY imports related to encryption or relay should be:
++
++import {
++  encryptMediaAction,
++  decryptMediaAction,
++  exportPackageAction,
++  importPackageAction,
++  uploadEncryptedTrackAction,
++  downloadEncryptedTrackAction,
++  saveMetadataAction,
++  loadMetadataAction
++} from './actions';
++
++Do not leave ANY unused or duplicate imports.
++Do not reference encryption.ts or relayStore.ts directly anymore.
++
+
+# 2025-11-23 20:56:36.802610
++edit: src/app/app/page.tsx
++
++Do the same cleanup:
++Delete ALL encryption.ts or relayStore.ts imports.
++Import ONLY from '../actions' or './actions'.
++
+
+# 2025-11-23 20:59:54.522801
++edit: src/app/actions.ts
++
++At the very top, ensure the ONLY first line is:
++'use server';
++
++Then immediately add:
++export const dynamic = "force-dynamic";
++export const experimental_ppr = true;
++
++Wrap all server action exports inside a single exported object like this:
++
++'use server';
++export const dynamic = "force-dynamic";
++export const experimental_ppr = true;
++
++export const Actions = {
++  encryptMediaAction: async (buffer, password) => {
++    const { encryptMedia } = await import('../server/encryption');
++    return encryptMedia(buffer, password);
++  },
++
++  decryptMediaAction: async (buffer, password, iv, authTag) => {
++    const { decryptMedia } = await import('../server/encryption');
++    return decryptMedia(buffer, password, iv, authTag);
++  },
++
++  exportPackageAction: async (meta, encryptedBytes) => {
++    const { createOnestarPackage } = await import('../server/encryption');
++    return createOnestarPackage(meta, encryptedBytes);
++  },
++
++  importPackageAction: async (buffer) => {
++    const { parseOnestarPackage } = await import('../server/encryption');
++    return parseOnestarPackage(buffer);
++  },
++
++  uploadEncryptedTrackAction: async (id, bytes) => {
++    const { uploadEncryptedTrack } = await import('../server/relayStore');
++    return uploadEncryptedTrack(id, bytes);
++  },
++
++  downloadEncryptedTrackAction: async (id) => {
++    const { downloadEncryptedTrack } = await import('../server/relayStore');
++    return downloadEncryptedTrack(id);
++  },
++
++  saveMetadataAction: async (id, metadata) => {
++    const { saveMetadata } = await import('../server/relayStore');
++    return saveMetadata(id, metadata);
++  },
++
++  loadMetadataAction: async (id) => {
++    const { loadMetadata } = await import('../server/relayStore');
++    return loadMetadata(id);
++  }
++};
++
+
+# 2025-11-23 21:02:32.652900
++edit: src/app/actions.ts
++'use server';
++
++// Prevent static optimization so Next.js won't treat imports as server component deps
++export const dynamic = "force-dynamic";
++export const experimental_ppr = true;
++
++// Clean, simple named exports so your pages can import them normally
++export async function encryptMediaAction(buffer, password) {
++  const { encryptMedia } = await import('../server/encryption');
++  return encryptMedia(buffer, password);
++}
++
++export async function decryptMediaAction(buffer, password, iv, authTag) {
++  const { decryptMedia } = await import('../server/encryption');
++  return decryptMedia(buffer, password, iv, authTag);
++}
++
++export async function exportPackageAction(meta, encryptedBytes) {
++  const { createOnestarPackage } = await import('../server/encryption');
++  return createOnestarPackage(meta, encryptedBytes);
++}
++
++export async function importPackageAction(buffer) {
++  const { parseOnestarPackage } = await import('../server/encryption');
++  return parseOnestarPackage(buffer);
++}
++
++export async function uploadEncryptedTrackAction(id, bytes) {
++  const { uploadEncryptedTrack } = await import('../server/relayStore');
++  return uploadEncryptedTrack(id, bytes);
++}
++
++export async function downloadEncryptedTrackAction(id) {
++  const { downloadEncryptedTrack } = await import('../server/relayStore');
++  return downloadEncryptedTrack(id);
++}
++
++export async function saveMetadataAction(id, metadata) {
++  const { saveMetadata } = await import('../server/relayStore');
++  return saveMetadata(id, metadata);
++}
++
++export async function loadMetadataAction(id) {
++  const { loadMetadata } = await import('../server/relayStore');
++  return loadMetadata(id);
++}
++
+
+# 2025-11-23 23:11:53.118304
++cd /Users/owner/projects/onestarstream
++
++aider \
++  src/app/actions.ts \
++  src/app/page.tsx \
++  src/app/upload/page.tsx \
++  src/server/encryption.ts \
++  src/server/relayStore.ts
++You are working in a Next.js 16 app repo.
++
++GOALS (do these in order, with minimal changes):
++
++1) FIX SERVER ACTIONS WIRING
++- File: src/app/actions.ts
++- This file is a `"use server"` server actions module.
++- It MUST ONLY export async functions; remove any `dynamic`, `experimental_ppr`, objects, or other exports.
++- Export the following named async functions exactly, each one delegating to the server modules via dynamic import:
++
++  export async function encryptMediaAction(buffer: Uint8Array, password: string)
++  export async function decryptMediaAction(buffer: Uint8Array, password: string, iv: Buffer, authTag: Buffer)
++  export async function exportPackageAction(meta: any, encryptedBytes: Uint8Array): Promise<Buffer>
++  export async function importPackageAction(buffer: ArrayBuffer): Promise<{ meta: any; contents: Buffer }>
++  export async function uploadEncryptedTrackAction(id: string, encrypted: Uint8Array)
++  export async function downloadEncryptedTrackAction(id: string): Promise<Buffer | null>
++  export async function saveMetadataAction(id: string, metadata: any)
++  export async function loadMetadataAction(id: string): Promise<object | null>
++
++- Each function should do a dynamic import from:
++  ../server/encryption   (for encrypt/decrypt/createOnestarPackage/parseOnestarPackage)
++  ../server/relayStore   (for upload/download/saveMetadata/loadMetadata)
++
++2) ENSURE IMPORTS MATCH IN PAGE COMPONENTS
++- File: src/app/page.tsx
++- It imports these from './actions':
++
++  encryptMediaAction,
++  decryptMediaAction,
++  exportPackageAction,
++  importPackageAction,
++  uploadEncryptedTrackAction,
++  downloadEncryptedTrackAction,
++  saveMetadataAction,
++  loadMetadataAction
++
++- Make sure the imports and the exports match 1:1 with src/app/actions.ts (no missing or extra names).
++- Do NOT rename them.
++- Do NOT change the overall UI structure in this file yet; only fix imports/calls as needed to compile.
++
++- File: src/app/upload/page.tsx
++- It imports { sendTrackToRecipientAction } from "../actions".
++- Either:
++  - implement sendTrackToRecipientAction in src/app/actions.ts as an async server action that:
++    - accepts the data the page is passing,
++    - uses the same encryption / relayStore pipeline as the existing upload flow to send a track to a specific user by email/username, OR
++  - if that is not appropriate, temporarily remove that import and any calls to sendTrackToRecipientAction so the file compiles without changing the visible UI text.
++
++3) RESTORE THE 0.1 PLAYER + UPLOAD UI FROM GIT HISTORY
++- I previously had a 0.1 DMG build with a "sweet" player UI and an upload screen with:
++  - top menu with Upload and Library,
++  - player UI with delete button,
++  - my original text/wording (0.1 UI),
++  - working library listing / playback.
++- Use git history to find the last commit where src/app/page.tsx and src/app/upload/page.tsx contained that older 0.1 UI.
++  - Inspect recent commits for these files.
++  - Restore their JSX/markup and layout to match that earlier version as closely as possible.
++  - Keep the current server action wiring you just fixed.
++  - DO NOT remove the basic encryption/relayStore flow that now lives under src/server; just adapt the old UI to call the new server actions.
++- Do not introduce new routes or new top-level layout changes; just bring back the old player+upload UI in these files.
++
++4) MINIMIZE CHANGES
++- Only touch these files unless absolutely necessary:
++  - src/app/actions.ts
++  - src/app/page.tsx
++  - src/app/upload/page.tsx
++  - src/server/encryption.ts
++  - src/server/relayStore.ts
++- Make focused edits. Avoid inventing brand new features or redesigning the UI.
++- The primary objective is:
++  - app compiles on Next 16 with no server-action export errors,
++  - landing page shows the old 0.1 player + upload UI (menu, player, library, delete),
++  - upload page is consistent and uses the same design language,
++  - sharing can later be wired via sendTrackToRecipientAction but should not break the build now.
++
++Please:
++- Show each diff you apply.
++- After changes, summarize what you did in 3–5 bullet points.
++
+
+# 2025-11-23 23:11:58.447666
++y
