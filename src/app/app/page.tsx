@@ -126,7 +126,7 @@ export default function AppPage() {
     setShareSubmitting(false);
   }
 
-  async function handleShareSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleShareSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!shareItem) return;
 
@@ -144,18 +144,26 @@ export default function AppPage() {
         }),
       });
 
-      const data = await res.json().catch(() => ({} as any));
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch {
+        data = {};
+      }
 
-      if (!res.ok || !data.valid) {
-        setShareError(data.error || 'Failed to share this track.');
+      if (!res.ok || !data.ok) {
+        setShareError(data.error || 'Failed to share track.');
         return;
       }
 
-      // Success: close the modal
-      closeShare();
+      // Success – close modal + reset fields
+      setShareItem(null);
+      setShareRecipient('');
+      setShareDownloadable(true);
+      setShareError(null);
     } catch (err) {
-      console.error('Error sharing track:', err);
-      setShareError('Failed to share this track.');
+      console.error('Share submit error:', err);
+      setShareError('Failed to share track.');
     } finally {
       setShareSubmitting(false);
     }
