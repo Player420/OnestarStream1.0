@@ -2,11 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getUserFromRequest } from '@/lib/authSession';
 
 export async function GET(req: NextRequest) {
-  // Try to resolve the current user from the session cookie
   const user = await getUserFromRequest(req);
 
+  // Not logged in
   if (!user) {
-    // Not logged in
     return NextResponse.json(
       {
         authenticated: false,
@@ -16,7 +15,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Logged in – expose only safe fields
+  // Logged in — expose safe fields
   return NextResponse.json(
     {
       authenticated: true,
@@ -30,3 +29,4 @@ export async function GET(req: NextRequest) {
     { status: 200 }
   );
 }
+

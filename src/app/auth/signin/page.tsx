@@ -6,38 +6,57 @@ import { useRouter } from 'next/navigation';
 export default function SigninPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setError(null);
+    setLoading(true);
 
-    const res = await fetch('/api/auth/signin', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
+    try {
+      const res = await fetch('/api/auth/signin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
 
-    if (res.ok) {
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch {
+        data = {};
+      }
+
+      if (!res.ok) {
+        setError(data.error || 'Invalid credentials');
+        return;
+      }
+
       router.push('/app');
-    } else {
-      const data = await res.json();
-      setError(data.error || 'Invalid credentials');
+    } catch (err) {
+      console.error('Signin error:', err);
+      setError('Failed to sign in.');
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <main style={{ maxWidth: 400, margin: '0 auto', padding: 16 }}>
       <h1>Log In</h1>
+
       <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 12 }}>
         <input
           type="email"
-          placeholder="Email"
+          placeholder="Email address"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
         />
+
         <input
           type="password"
           placeholder="Password"
@@ -45,9 +64,17 @@ export default function SigninPage() {
           onChange={(e) => setPassword(e.target.value)}
           required
         />
-        <button type="submit">Log In</button>
+
+        <button type="submit" disabled={loading}>
+          {loading ? 'Logging in…' : 'Log In'}
+        </button>
       </form>
-      {error && <p style={{ color: 'red' }}>{error}</p>}
+
+      {error && <p style={{ color: 'red', marginTop: 10 }}>{error}</p>}
+
+      <p style={{ marginTop: 20 }}>
+        Don&apos;t have an account? <a href="/auth/signup">Sign up</a>
+      </p>
     </main>
   );
 }

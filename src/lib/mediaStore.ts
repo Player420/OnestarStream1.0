@@ -6,6 +6,7 @@ export type MediaType = 'audio' | 'video' | 'image';
 
 export interface MediaItem {
   id: string;
+  ownerId: string;          // NEW: which user owns this media
   title: string;
   fileName: string;
   type: MediaType;
@@ -29,16 +30,43 @@ async function ensureSetup() {
   }
 }
 
+/**
+ * Load and normalize all media entries.
+ * Old entries (from before ownerId) get ownerId = 'legacy-global'
+ * so we can keep them distinct and ignore them in per-user views.
+ */
 export async function getAllMedia(): Promise<MediaItem[]> {
   await ensureSetup();
   const raw = await fs.readFile(META_PATH, 'utf8');
-  const items = JSON.parse(raw) as MediaItem[];
 
-  // Ensure protected is always a boolean
-  return items.map((item) => ({
-    ...item,
-    protected: item.protected ?? false,
-  }));
+  let items: any[] = [];
+  try {
+    const parsed = JSON.parse(raw);
+    items = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    items = [];
+  }
+
+  return items.map((item: any) => {
+    const ownerId =
+      typeof item.ownerId === 'string' && item.ownerId.length > 0
+        ? item.ownerId
+        : 'legacy-global';
+
+    const mediaType: MediaType =
+      item.type === 'video' || item.type === 'image' ? item.type : 'audio';
+
+    return {
+      id: item.id ?? randomUUID(),
+      ownerId,
+      title: item.title ?? '',
+      fileName: item.fileName,
+      type: mediaType,
+      sizeBytes: typeof item.sizeBytes === 'number' ? item.sizeBytes : 0,
+      createdAt: item.createdAt ?? new Date().toISOString(),
+      protected: item.protected ?? false,
+    } satisfies MediaItem;
+  });
 }
 
 async function saveAllMedia(items: MediaItem[]) {
@@ -46,6 +74,7 @@ async function saveAllMedia(items: MediaItem[]) {
 }
 
 interface AddMediaInput {
+  ownerId: string;       // NEW: who owns this media
   title: string;
   type: MediaType;
   sizeBytes: number;
@@ -53,9 +82,12 @@ interface AddMediaInput {
   contents: Buffer;
 }
 
+/**
+ * Symmetric key for media encryption (protected files).
+ * Uses ONESTAR_KEY from env or a fixed dev default.
+ */
 function getKey(): Buffer {
   // 32-byte key for AES-256-GCM.
-  // Default is a fixed hex string; override via ONESTAR_KEY in env for real usage.
   const defaultKeyHex = '0123456789abcdef0123456789abcdef';
   const keyHex = process.env.ONESTAR_KEY || defaultKeyHex;
   return Buffer.from(keyHex, 'hex');
@@ -71,7 +103,7 @@ function encryptBuffer(plain: Buffer): Buffer {
   return Buffer.concat([iv, authTag, encrypted]);
 }
 
-function decryptBuffer(encrypted: Buffer): Buffer {
+function decryptBufferInternal(encrypted: Buffer): Buffer {
   const key = getKey();
   const iv = encrypted.slice(0, 16);
   const authTag = encrypted.slice(16, 32);
@@ -82,8 +114,12 @@ function decryptBuffer(encrypted: Buffer): Buffer {
 }
 
 // Export decryptBuffer if you need it in /api/protected-stream
-export { decryptBuffer };
+export { decryptBufferInternal as decryptBuffer };
 
+/**
+ * Add a new media item, optionally protected (encrypted),
+ * and associate it with a specific ownerId.
+ */
 export async function addMedia(
   input: AddMediaInput & { protected?: boolean }
 ): Promise<MediaItem> {
@@ -93,10 +129,12 @@ export async function addMedia(
   const id = randomUUID();
   const ext = path.extname(input.originalName) || '';
   const fileName = `${id}${ext}`;
-  let newItem: MediaItem; // declare once, use in both branches
+  let newItem: MediaItem;
 
-  if (input.protected) {
-    // Protected: encrypt and store in SECURE_MEDIA_DIR as .bin
+  const isProtected = !!input.protected;
+
+  if (isProtected) {
+    // Protected: encrypt and store in secure_media as .bin
     const encryptedContents = encryptBuffer(input.contents);
     const secureFileName = `${id}.bin`;
     const filePath = path.join(PROTECTED_MEDIA_DIR, secureFileName);
@@ -105,6 +143,7 @@ export async function addMedia(
 
     newItem = {
       id,
+      ownerId: input.ownerId,
       title: input.title,
       fileName: secureFileName,
       type: input.type,
@@ -119,6 +158,7 @@ export async function addMedia(
 
     newItem = {
       id,
+      ownerId: input.ownerId,
       title: input.title,
       fileName,
       type: input.type,
@@ -134,6 +174,10 @@ export async function addMedia(
   return newItem;
 }
 
+/**
+ * Delete a media item by id.
+ * (Caller should ensure only the owner can trigger this.)
+ */
 export async function deleteMedia(id: string): Promise<boolean> {
   await ensureSetup();
   const items = await getAllMedia();
@@ -147,13 +191,10 @@ export async function deleteMedia(id: string): Promise<boolean> {
   await saveAllMedia(items);
 
   // Choose correct base directory depending on protected flag
-  const baseDir =
-    deletedItem.protected ? PROTECTED_MEDIA_DIR : MEDIA_DIR;
+  const baseDir = deletedItem.protected ? PROTECTED_MEDIA_DIR : MEDIA_DIR;
   const filePath = path.join(baseDir, deletedItem.fileName);
 
   try {
-    // Delete the media file from disk
-    // @ts-expect-error: fs type may not include code on error
     await fs.unlink(filePath);
   } catch (err: any) {
     if (err.code !== 'ENOENT') throw err;
@@ -162,12 +203,25 @@ export async function deleteMedia(id: string): Promise<boolean> {
   return true;
 }
 
-
+/**
+ * Get a single media item by id (any owner).
+ */
 export async function getMediaById(id: string): Promise<MediaItem | null> {
   const items = await getAllMedia();
   return items.find((i) => i.id === id) ?? null;
 }
 
+/**
+ * Get all media items belonging to a specific user.
+ */
+export async function getMediaForUser(ownerId: string): Promise<MediaItem[]> {
+  const items = await getAllMedia();
+  return items.filter((i) => i.ownerId === ownerId);
+}
+
+/**
+ * Resolve the on-disk path to a media file.
+ */
 export function getMediaFilePath(item: MediaItem): string {
   const baseDir = item.protected ? PROTECTED_MEDIA_DIR : MEDIA_DIR;
   return path.join(baseDir, item.fileName);

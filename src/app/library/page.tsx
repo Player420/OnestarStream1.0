@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { redirect } from 'next/navigation';
 
 type MediaType = 'audio' | 'video' | 'image';
 
@@ -15,10 +16,28 @@ interface MediaItem {
 }
 
 export default function LibraryPage() {
+  // -------------------------------
+  // AUTH GATE – ALWAYS FIRST HOOKS
+  // -------------------------------
+  const [auth, setAuth] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    fetch('/api/auth/me', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => setAuth(!!data.user))
+      .catch(() => setAuth(false));
+  }, []);
+
+  // -------------------------------
+  // LIBRARY STATE
+  // -------------------------------
   const [items, setItems] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Only load media AFTER we know they're authenticated
   useEffect(() => {
+    if (auth !== true) return;
+
     async function load() {
       try {
         const res = await fetch('/api/media');
@@ -38,9 +57,23 @@ export default function LibraryPage() {
       }
     }
 
-    load();
-  }, []);
+    void load();
+  }, [auth]);
 
+  // -------------------------------
+  // AUTH-BASED RENDER BRANCHES
+  // -------------------------------
+  if (auth === null) {
+    return <main style={{ padding: 24 }}>Checking session…</main>;
+  }
+
+  if (auth === false) {
+    redirect('/auth/signin');
+  }
+
+  // -------------------------------
+  // ORIGINAL LIBRARY UI (UNCHANGED)
+  // -------------------------------
   return (
     <main style={{ maxWidth: 900, margin: '0 auto', padding: 16 }}>
       <header

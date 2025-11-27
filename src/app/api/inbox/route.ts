@@ -1,43 +1,60 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listSharesForRecipient } from '@/lib/shareStore';
 import { getUserFromRequest } from '@/lib/authSession';
+import { listSharesForRecipient, type ShareRecord } from '@/lib/shareStore';
 
+/**
+ * GET /api/inbox?recipient=...
+ *
+ * Returns ONLY "pending" shares for the given recipient:
+ *  - acceptedAt === null
+ *  - rejectedAt === null
+ */
 export async function GET(req: NextRequest) {
   try {
     const user = await getUserFromRequest(req);
-
     if (!user) {
       return NextResponse.json(
-        { ok: false, error: 'You must be logged in to view your inbox.' },
+        { ok: false, error: 'Not authenticated.' },
         { status: 401 }
       );
     }
 
-    // A share is valid for this user if recipient matches either:
-    // - their email (case-insensitive), OR
-    // - their username (exact match).
-    const email = user.email.toLowerCase();
-    const username = user.username;
+    const url = new URL(req.url);
+    const recipientParam = url.searchParams.get('recipient')?.trim() ?? '';
 
-    const sharesByEmail = await listSharesForRecipient(email);
-    const sharesByUsername =
-      username.toLowerCase() === email
-        ? []
-        : await listSharesForRecipient(username);
+    // If caller passes ?recipient=..., trust it; otherwise fall back to current user
+    const recipient =
+      recipientParam || user.username || user.email || '';
 
-    // Merge, dedupe by id
-    const merged = [...sharesByEmail];
-    for (const s of sharesByUsername) {
-      if (!merged.some((m) => m.id === (s as any).id)) {
-        merged.push(s);
-      }
+    if (!recipient) {
+      return NextResponse.json(
+        { ok: false, error: 'No valid recipient was resolved.' },
+        { status: 400 }
+      );
     }
 
-    return NextResponse.json({ ok: true, shares: merged });
-  } catch (err) {
-    console.error('[GET /api/inbox] error', err);
+    // Load all shares for that recipient from shares.json
+    const allShares: ShareRecord[] = await listSharesForRecipient(recipient);
+
+    // Only show PENDING (not accepted, not rejected)
+    const pending = allShares.filter(
+      (s) => !s.acceptedAt && !s.rejectedAt
+    );
+
     return NextResponse.json(
-      { ok: false, error: 'Internal server error.' },
+      {
+        ok: true,
+        shares: pending,
+      },
+      { status: 200 }
+    );
+  } catch (err) {
+    console.error('[GET /api/inbox] Internal error:', err);
+    return NextResponse.json(
+      {
+        ok: false,
+        error: 'Internal server error while loading inbox.',
+      },
       { status: 500 }
     );
   }

@@ -16,4 +16,17 @@ public/media/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Env / secrets
+.env
 .env.local
+.env.*.local
+
+# Encrypted user store
+users.enc
+
+# Local media + shares on this machine
+media.json
+shares.json
+public/media/
+secure_media/

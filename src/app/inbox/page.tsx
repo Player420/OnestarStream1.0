@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { redirect } from 'next/navigation';
 import { CurrentUserBadge } from '@/components/CurrentUserBadge';
 
 type MediaType = 'audio' | 'video' | 'image';
@@ -29,6 +30,11 @@ interface MeResponse {
 }
 
 export default function InboxPage() {
+  // ------------------------------------------------
+  // AUTH + INBOX STATE — ALL HOOKS FIRST
+  // ------------------------------------------------
+  const [auth, setAuth] = useState<boolean | null>(null);
+
   const [shares, setShares] = useState<ShareRecord[]>([]);
   const [loadingUser, setLoadingUser] = useState(true);
   const [loadingInbox, setLoadingInbox] = useState(false);
@@ -38,40 +44,10 @@ export default function InboxPage() {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [currentRecipient, setCurrentRecipient] = useState<string | null>(null);
 
-  // Load logged-in user & inbox
+  // ------------------------------------------------
+  // EFFECT: auth + load inbox for that user
+  // ------------------------------------------------
   useEffect(() => {
-    async function init() {
-      setError(null);
-      setStatusMsg(null);
-      setShares([]);
-      setLoadingUser(true);
-
-      try {
-        const res = await fetch('/api/auth/me', { cache: 'no-store' });
-        if (!res.ok) {
-          setError('Could not determine current user. Please sign in again.');
-          return;
-        }
-
-        const data: MeResponse = await res.json();
-
-        if (!data.authenticated || !data.user) {
-          setError('You are not signed in. Go to Sign in to view your inbox.');
-          return;
-        }
-
-        const recipientAddress = data.user.username || data.user.email;
-        setCurrentRecipient(recipientAddress);
-
-        await loadInboxForRecipient(recipientAddress);
-      } catch (err) {
-        console.error('Error loading current user for inbox:', err);
-        setError('Failed to load your inbox. Please try again.');
-      } finally {
-        setLoadingUser(false);
-      }
-    }
-
     async function loadInboxForRecipient(recipient: string) {
       setLoadingInbox(true);
       setShares([]);
@@ -101,10 +77,48 @@ export default function InboxPage() {
       }
     }
 
+    async function init() {
+      setError(null);
+      setStatusMsg(null);
+      setShares([]);
+      setLoadingUser(true);
+
+      try {
+        const res = await fetch('/api/auth/me', { cache: 'no-store' });
+        if (!res.ok) {
+          setError('Could not determine current user. Please sign in again.');
+          setAuth(false);
+          return;
+        }
+
+        const data: MeResponse = await res.json();
+
+        if (!data.authenticated || !data.user) {
+          setAuth(false);
+          return;
+        }
+
+        setAuth(true);
+
+        const recipientAddress = data.user.username || data.user.email;
+        setCurrentRecipient(recipientAddress);
+
+        await loadInboxForRecipient(recipientAddress);
+      } catch (err) {
+        console.error('Error loading current user for inbox:', err);
+        setError('Failed to load your inbox. Please try again.');
+        setAuth(false);
+      } finally {
+        setLoadingUser(false);
+      }
+    }
+
     void init();
   }, []);
 
-  // Accept handler
+  // ------------------------------------------------
+  // ACTIONS
+  // ------------------------------------------------
   async function handleAccept(share: ShareRecord) {
     setError(null);
     setStatusMsg(null);
@@ -129,7 +143,9 @@ export default function InboxPage() {
       }
 
       setShares((prev) => prev.filter((s) => s.id !== share.id));
-      setStatusMsg(`Accepted "${share.mediaTitle || '(untitled)'}". It is now in your library.`);
+      setStatusMsg(
+        `Accepted "${share.mediaTitle || '(untitled)'}". It is now in your library.`
+      );
     } catch (err) {
       console.error('Error accepting share:', err);
       setError('Failed to accept share.');
@@ -138,27 +154,48 @@ export default function InboxPage() {
     }
   }
 
-  // Dismiss handler
-  async function handleDismiss(share: ShareRecord) {
+    async function handleDismiss(share: ShareRecord) {
     setError(null);
     setStatusMsg(null);
-    setDismissId(share.id);
+
+    // Use id if present, otherwise fall back to packageId for legacy shares
+    const spinnerKey = share.id ?? share.packageId;
+    setDismissId(spinnerKey);
 
     try {
       const res = await fetch('/api/inbox/dismiss', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shareId: share.id }),
+        body: JSON.stringify({
+          shareId: share.id ?? null,
+          packageId: share.packageId,
+        }),
       });
 
-      const data = await res.json();
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch {
+        data = {};
+      }
 
       if (!res.ok || !data.ok) {
         setError(data.error || 'Failed to dismiss share.');
         return;
       }
 
-      setShares((prev) => prev.filter((s) => s.id !== share.id));
+      // Remove it from local state:
+      // - if it has an id, match by id
+      // - if it has no id (legacy), match by packageId
+      setShares((prev) =>
+        prev.filter((s) => {
+          if (share.id && s.id) {
+            return s.id !== share.id;
+          }
+          // legacy: no id, compare packageId
+          return s.packageId !== share.packageId;
+        })
+      );
     } catch (err) {
       console.error('Error dismissing share:', err);
       setError('Failed to dismiss share.');
@@ -169,6 +206,20 @@ export default function InboxPage() {
 
   const loading = loadingUser || loadingInbox;
 
+  // ------------------------------------------------
+  // AUTH GATE — AFTER ALL HOOKS
+  // ------------------------------------------------
+  if (auth === null) {
+    return <main style={{ padding: 24 }}>Checking session…</main>;
+  }
+
+  if (auth === false) {
+    redirect('/auth/signin');
+  }
+
+  // ------------------------------------------------
+  // RENDER
+  // ------------------------------------------------
   return (
     <main style={{ maxWidth: 900, margin: '0 auto', padding: 16 }}>
       {/* HEADER */}
@@ -208,8 +259,16 @@ export default function InboxPage() {
             Viewing inbox for <strong>{currentRecipient}</strong>.
           </p>
         )}
-        {error && <p style={{ marginTop: 8, fontSize: 12, color: '#b00020' }}>{error}</p>}
-        {statusMsg && !error && <p style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>{statusMsg}</p>}
+        {error && (
+          <p style={{ marginTop: 8, fontSize: 12, color: '#b00020' }}>
+            {error}
+          </p>
+        )}
+        {statusMsg && !error && (
+          <p style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+            {statusMsg}
+          </p>
+        )}
       </section>
 
       {/* LIST */}
@@ -218,7 +277,8 @@ export default function InboxPage() {
 
         {!loading && !error && shares.length === 0 && (
           <p style={{ opacity: 0.7 }}>
-            No pending shares for your account yet. When someone shares a track with you, it will show up here.
+            No pending shares for your account yet. When someone shares a track
+            with you, it will show up here.
           </p>
         )}
 
@@ -261,9 +321,8 @@ export default function InboxPage() {
                     </p>
                   </div>
 
-                  {/* BUTTON ROW */}
+                  {/* BUTTONS */}
                   <div style={{ display: 'flex', gap: 8 }}>
-                    {/* Accept (unchanged) */}
                     <button
                       type="button"
                       onClick={() => handleAccept(share)}
@@ -281,7 +340,6 @@ export default function InboxPage() {
                       {acceptingId === share.id ? 'Accepting…' : 'Accept'}
                     </button>
 
-                    {/* Dismiss (identical styling) */}
                     <button
                       type="button"
                       onClick={() => handleDismiss(share)}
@@ -316,7 +374,11 @@ export default function InboxPage() {
                   <span>•</span>
                   <span>{new Date(share.createdAt).toLocaleString()}</span>
                   <span>•</span>
-                  <span>{share.downloadable ? 'Downloadable' : 'Protected / play-only'}</span>
+                  <span>
+                    {share.downloadable
+                      ? 'Downloadable'
+                      : 'Protected / play-only'}
+                  </span>
                 </p>
               </div>
             ))}

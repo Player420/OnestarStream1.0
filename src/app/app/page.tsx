@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, FormEvent } from 'react';
+import { redirect } from 'next/navigation';
 import { CurrentUserBadge } from "@/components/CurrentUserBadge";
 
 function HamburgerMenu({ onDelete }: { onDelete: () => void }) {
@@ -54,7 +55,22 @@ interface MediaItem {
   protected: boolean;
 }
 
-export default function HomePage() {
+export default function AppPage() {
+  // -------------------------------
+  // AUTH STATE — ALWAYS FIRST
+  // -------------------------------
+  const [auth, setAuth] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    fetch('/api/auth/me', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => setAuth(!!data.user))
+      .catch(() => setAuth(false));
+  }, []);
+
+  // -------------------------------
+  // ORIGINAL APP STATE
+  // -------------------------------
   const [items, setItems] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -65,18 +81,10 @@ export default function HomePage() {
   const [shareError, setShareError] = useState<string | null>(null);
   const [shareSubmitting, setShareSubmitting] = useState(false);
 
-  // NEW: real logout handler
-  const handleLogout = async () => {
-    try {
-      await fetch('/api/auth/logout', { method: 'POST' });
-      // redirect to your existing sign-in route
-      window.location.href = '/auth/signin'; // change this path if your login URL is different
-    } catch (err) {
-      console.error('Error logging out:', err);
-    }
-  };
-
+  // Only load media AFTER we know they're authenticated
   useEffect(() => {
+    if (auth !== true) return;
+
     async function load() {
       const res = await fetch('/api/media');
       if (!res.ok) {
@@ -89,8 +97,19 @@ export default function HomePage() {
       setItems(data);
       setLoading(false);
     }
-    load();
-  }, []);
+
+    void load();
+  }, [auth]);
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (err) {
+      console.error('Error logging out:', err);
+    } finally {
+      window.location.href = '/auth/signin';
+    }
+  };
 
   function openShare(item: MediaItem) {
     setShareItem(item);
@@ -142,6 +161,20 @@ export default function HomePage() {
     }
   }
 
+  // -------------------------------
+  // AUTH-BASED RENDER BRANCHES
+  // -------------------------------
+  if (auth === null) {
+    return <main style={{ padding: 24 }}>Checking session…</main>;
+  }
+
+  if (auth === false) {
+    redirect('/auth/signin');
+  }
+
+  // -------------------------------
+  // MAIN PLAYER UI (WITH DOWNLOAD + SHARE)
+  // -------------------------------
   return (
     <main style={{ maxWidth: 900, margin: '0 auto', padding: 16 }}>
       <header
@@ -163,7 +196,6 @@ export default function HomePage() {
           <a href="/library">Library</a>
           <a href="/inbox">Inbox</a>
           <CurrentUserBadge />
-
           <button
             type="button"
             onClick={handleLogout}
@@ -205,9 +237,11 @@ export default function HomePage() {
 
               const handleDelete = async () => {
                 try {
-                  const res = await fetch(`/api/media/${item.id}`, { method: 'DELETE' });
+                  const res = await fetch(`/api/media/${item.id}`, {
+                    method: 'DELETE',
+                  });
                   if (res.ok) {
-                    setItems((prevItems) => prevItems.filter((i) => i.id !== item.id));
+                    setItems((prev) => prev.filter((i) => i.id !== item.id));
                   } else {
                     alert('Failed to delete media.');
                   }
@@ -350,7 +384,7 @@ export default function HomePage() {
               style={{
                 margin: 0,
                 marginBottom: 8,
-                color: '#ff80c8', // title color
+                color: '#ff80c8',
               }}
             >
               Share “{shareItem.title || '(untitled)'}”
@@ -367,10 +401,7 @@ export default function HomePage() {
               accounts can receive this track.
             </p>
 
-            <form
-              onSubmit={handleShareSubmit}
-              style={{ display: 'grid', gap: 8 }}
-            >
+            <form onSubmit={handleShareSubmit} style={{ display: 'grid', gap: 8 }}>
               <label style={{ fontSize: 13, color: '#dddddd' }}>
                 Recipient
                 <input

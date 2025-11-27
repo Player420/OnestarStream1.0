@@ -1,43 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { acceptSharedPackage } from '@/server/accept';
-import { markShareAccepted } from '@/lib/shareStore';
+import { getUserFromRequest } from '@/lib/authSession';
+import { getShareById, markShareAccepted } from '@/lib/shareStore';
+import { getMediaById } from '@/lib/mediaStore';
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({} as any));
-    const { packageId, shareId, downloadable } = body;
-
-    if (!packageId) {
+    const user = await getUserFromRequest(req);
+    if (!user) {
       return NextResponse.json(
-        { ok: false, error: 'Missing packageId' },
+        { ok: false, error: 'Not authenticated.' },
+        { status: 401 }
+      );
+    }
+
+    const body = await req.json().catch(() => null);
+    if (!body || !body.shareId) {
+      return NextResponse.json(
+        { ok: false, error: 'shareId is required.' },
         { status: 400 }
       );
     }
 
-    // Actually import/decrypt the package into Protected media
-    const accepted = await acceptSharedPackage({
-      packageId,
-      downloadable: downloadable !== false,
-    });
+    const { shareId } = body as { shareId: string };
 
-    if (!accepted) {
+    const share = await getShareById(shareId);
+    if (!share) {
       return NextResponse.json(
-        { ok: false, error: 'Failed to accept package.' },
-        { status: 500 }
+        { ok: false, error: 'Share not found.' },
+        { status: 404 }
       );
     }
 
-    // If we know which share this came from, mark it accepted
-    if (shareId) {
-      await markShareAccepted(shareId);
+    const media = await getMediaById(share.mediaId);
+    if (!media) {
+      return NextResponse.json(
+        { ok: false, error: 'Original media not found.' },
+        { status: 404 }
+      );
     }
 
-    return NextResponse.json({ ok: true });
+    await markShareAccepted(shareId);
+
+    // In your current architecture media.json is global,
+    // so we don't need to duplicate the file; accept just marks it.
+    return NextResponse.json({ ok: true }, { status: 200 });
   } catch (err) {
-    console.error('Error in /api/inbox/accept:', err);
+    console.error('[POST /api/inbox/accept] Internal error:', err);
     return NextResponse.json(
-      { ok: false, error: 'Error accepting shared item.' },
+      { ok: false, error: 'Internal server error while accepting share.' },
       { status: 500 }
     );
   }
 }
+

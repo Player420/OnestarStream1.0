@@ -1,17 +1,20 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { randomUUID } from 'crypto';
+import type { MediaType } from './mediaStore';
 
 export interface ShareRecord {
-  shareId: string;
-  mediaId: string;
-  recipient: string;
-  downloadable: boolean;
-  packageId: string;
+  id: string;                // stable share ID used everywhere
+  mediaId: string;           // ID of the original media item
+  recipient: string;         // username or email of recipient
+  downloadable: boolean;     // whether recipient can download
+  packageId: string;         // logical package/batch ID
   createdAt: string;
   acceptedAt: string | null;
-  rejectedAt?: string | null; // NEW FIELD
-  sender: string | null;
+  rejectedAt: string | null;
+  sender: string | null;     // username/email of sender (for UI)
+  mediaTitle: string;        // copied from media at share time
+  mediaType: MediaType;      // 'audio' | 'video' | 'image'
 }
 
 const SHARE_PATH = path.join(process.cwd(), 'shares.json');
@@ -51,18 +54,23 @@ async function saveAllShares(shares: ShareRecord[]) {
 
 /* -------------------------------------------------------
    Normalize raw object → ShareRecord
+   Handles older shapes { shareId, ... } or { id, ... }
 ---------------------------------------------------------*/
 function normalizeShare(raw: any): ShareRecord {
+  const id = raw.id ?? raw.shareId ?? randomUUID();
+
   return {
-    shareId: raw.shareId ?? raw.id ?? randomUUID(),
+    id,
     mediaId: raw.mediaId,
     recipient: raw.recipient,
     downloadable: raw.downloadable ?? true,
-    packageId: raw.packageId ?? `pkg_${raw.mediaId}`,
+    packageId: raw.packageId ?? `pkg_${raw.mediaId ?? id}`,
     createdAt: raw.createdAt ?? new Date().toISOString(),
     acceptedAt: raw.acceptedAt ?? null,
-    rejectedAt: raw.rejectedAt ?? null, // preserve if exists
+    rejectedAt: raw.rejectedAt ?? null,
     sender: raw.sender ?? null,
+    mediaTitle: raw.mediaTitle ?? raw.title ?? '(untitled)',
+    mediaType: (raw.mediaType as MediaType) ?? 'audio',
   };
 }
 
@@ -82,11 +90,13 @@ export async function createShare(input: {
   recipient: string;
   downloadable: boolean;
   sender: string | null;
+  mediaTitle: string;
+  mediaType: MediaType;
 }): Promise<ShareRecord> {
   const shares = await getAllSharesNormalized();
 
   const share: ShareRecord = {
-    shareId: randomUUID(),
+    id: randomUUID(),
     mediaId: input.mediaId,
     recipient: input.recipient,
     downloadable: input.downloadable,
@@ -95,6 +105,8 @@ export async function createShare(input: {
     acceptedAt: null,
     rejectedAt: null,
     sender: input.sender ?? null,
+    mediaTitle: input.mediaTitle,
+    mediaType: input.mediaType,
   };
 
   shares.push(share);
@@ -116,27 +128,25 @@ export async function listSharesForRecipient(
 /* -------------------------------------------------------
    Get a specific share by ID
 ---------------------------------------------------------*/
-export async function getShareById(
-  shareId: string
-): Promise<ShareRecord | null> {
+export async function getShareById(id: string): Promise<ShareRecord | null> {
   const shares = await getAllSharesNormalized();
-  return shares.find((s) => s.shareId === shareId) ?? null;
+  return shares.find((s) => s.id === id) ?? null;
 }
 
 /* -------------------------------------------------------
    Mark share as accepted
 ---------------------------------------------------------*/
 export async function markShareAccepted(
-  shareId: string
+  id: string
 ): Promise<ShareRecord | null> {
   const shares = await getAllSharesNormalized();
-  const idx = shares.findIndex((s) => s.shareId === shareId);
+  const idx = shares.findIndex((s) => s.id === id);
   if (idx === -1) return null;
 
   const updated: ShareRecord = {
     ...shares[idx],
     acceptedAt: new Date().toISOString(),
-    rejectedAt: null, // clear rejection if any
+    rejectedAt: null,
   };
 
   shares[idx] = updated;
@@ -148,16 +158,16 @@ export async function markShareAccepted(
    Mark share as rejected (DISMISS)
 ---------------------------------------------------------*/
 export async function markShareRejected(
-  shareId: string
+  id: string
 ): Promise<ShareRecord | null> {
   const shares = await getAllSharesNormalized();
-  const idx = shares.findIndex((s) => s.shareId === shareId);
+  const idx = shares.findIndex((s) => s.id === id);
   if (idx === -1) return null;
 
   const updated: ShareRecord = {
     ...shares[idx],
     rejectedAt: new Date().toISOString(),
-    acceptedAt: null, // ensure it's not accepted
+    acceptedAt: null,
   };
 
   shares[idx] = updated;

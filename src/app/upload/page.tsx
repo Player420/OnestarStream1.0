@@ -1,8 +1,24 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useState, useEffect } from 'react';
+import { redirect } from 'next/navigation';
 
 export default function UploadPage() {
+  // -------------------------------
+  // AUTH GATE – ALWAYS FIRST HOOKS
+  // -------------------------------
+  const [auth, setAuth] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    fetch('/api/auth/me', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => setAuth(!!data.user))
+      .catch(() => setAuth(false));
+  }, []);
+
+  // -------------------------------
+  // OTHER LOCAL STATE HOOKS
+  // -------------------------------
   const [status, setStatus] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -37,6 +53,20 @@ export default function UploadPage() {
     }
   }
 
+  // -------------------------------
+  // AUTH-BASED RENDER BRANCHES
+  // -------------------------------
+  if (auth === null) {
+    return <main style={{ padding: 24 }}>Checking session…</main>;
+  }
+
+  if (auth === false) {
+    redirect('/auth/signin');
+  }
+
+  // -------------------------------
+  // ORIGINAL UPLOAD UI (UNCHANGED)
+  // -------------------------------
   return (
     <main style={{ maxWidth: 600, margin: '0 auto', padding: 16 }}>
       <h1>OnestarStream – Upload</h1>

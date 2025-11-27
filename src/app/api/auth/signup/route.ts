@@ -10,58 +10,77 @@ import {
 } from '@/lib/authSession';
 
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => null);
-  if (!body) {
+  try {
+    const body = await req.json().catch(() => null);
+
+    if (!body) {
+      return NextResponse.json(
+        { ok: false, error: 'Invalid JSON body.' },
+        { status: 400 }
+      );
+    }
+
+    const { email, username, password } = body as {
+      email?: string;
+      username?: string;
+      password?: string;
+    };
+
+    if (!email || !username || !password) {
+      return NextResponse.json(
+        { ok: false, error: 'Email, username, and password are required.' },
+        { status: 400 }
+      );
+    }
+
+    // Duplicate email
+    const existingByEmail = await getUserByEmail(email);
+    if (existingByEmail) {
+      return NextResponse.json(
+        { ok: false, error: 'Email already in use.' },
+        { status: 400 }
+      );
+    }
+
+    // Duplicate username
+    const existingByUsername = await getUserByUsername(username);
+    if (existingByUsername) {
+      return NextResponse.json(
+        { ok: false, error: 'Username already in use.' },
+        { status: 400 }
+      );
+    }
+
+    // Create user
+    const user = await createUser(email, username, password);
+
+    // Create session cookie
+    const token = createSessionToken(user.id);
+
+    const res = NextResponse.json(
+      {
+        ok: true,
+        userId: user.id,
+      },
+      { status: 200 }
+    );
+
+    res.cookies.set(getSessionCookieName(), token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+      maxAge: 60 * 60 * 24 * 7, // 7 days (match signin)
+    });
+
+    return res;
+
+  } catch (err) {
+    console.error('[POST /api/auth/signup] Internal error:', err);
+
     return NextResponse.json(
-      { error: 'Invalid JSON body' },
-      { status: 400 },
+      { ok: false, error: 'Internal server error during signup.' },
+      { status: 500 }
     );
   }
-
-  const { email, username, password } = body as {
-    email?: string;
-    username?: string;
-    password?: string;
-  };
-
-  if (!email || !username || !password) {
-    return NextResponse.json(
-      { error: 'email, username and password are required' },
-      { status: 400 },
-    );
-  }
-
-  // Basic duplicate checks
-  const existingByEmail = await getUserByEmail(email);
-  if (existingByEmail) {
-    return NextResponse.json(
-      { error: 'Email already in use' },
-      { status: 400 },
-    );
-  }
-
-  const existingByUsername = await getUserByUsername(username);
-  if (existingByUsername) {
-    return NextResponse.json(
-      { error: 'Username already in use' },
-      { status: 400 },
-    );
-  }
-
-  // Create encrypted user record
-  const user = await createUser(email, username, password);
-
-  // Log them in immediately by setting session cookie
-  const token = createSessionToken(user.id);
-  const res = NextResponse.json({ ok: true, userId: user.id });
-
-  res.cookies.set(getSessionCookieName(), token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    maxAge: 60 * 60 * 24 * 30, // 30 days
-  });
-
-  return res;
 }

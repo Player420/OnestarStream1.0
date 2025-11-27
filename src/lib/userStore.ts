@@ -36,10 +36,20 @@ async function loadUsersEncrypted(): Promise<User[]> {
       decipher.update(encrypted),
       decipher.final(),
     ]);
+
     return JSON.parse(decrypted.toString('utf8')) as User[];
   } catch (err: any) {
-    if (err.code === 'ENOENT') return [];
-    throw err;
+    if (err?.code === 'ENOENT') {
+      // No file yet -> no users yet
+      return [];
+    }
+
+    // Key mismatch, corrupted file, etc.
+    console.error(
+      '[userStore] Failed to decrypt users.enc – treating as empty user store. Error:',
+      err
+    );
+    return [];
   }
 }
 
@@ -70,9 +80,7 @@ export async function getUserByEmail(email: string): Promise<User | null> {
   );
 }
 
-export async function getUserByUsername(
-  username: string
-): Promise<User | null> {
+export async function getUserByUsername(username: string): Promise<User | null> {
   const users = await getAllUsers();
   return users.find((user) => user.username === username) || null;
 }
@@ -88,6 +96,7 @@ export async function createUser(
   passwordPlain: string
 ): Promise<User> {
   const passwordHash = await argon2.hash(passwordPlain);
+
   const newUser: User = {
     id: randomUUID(),
     email,
@@ -115,47 +124,26 @@ export async function verifyUser(
 }
 
 /**
- * Find user by either email OR username.
- * Used for validating share recipients.
+ * Unified lookup used by share API:
+ * accepts either @username, username, or email.
  */
 export async function findUserByEmailOrUsername(
   identifier: string
 ): Promise<User | null> {
+  const normalized = identifier.trim().replace(/^@/, '');
   const users = await getAllUsers();
-  const lower = identifier.toLowerCase();
-  return (
-    users.find(
-      (u) =>
-        u.email.toLowerCase() === lower ||
-        u.username.toLowerCase() === lower
-    ) || null
+
+  const lower = normalized.toLowerCase();
+
+  // Try email match (case-insensitive)
+  const byEmail = users.find(
+    (u) => u.email.toLowerCase() === lower
   );
-}
+  if (byEmail) return byEmail;
 
-/**
- * Reset a user's password given an email or username.
- * Returns true if a user was found and updated, false otherwise.
- */
-export async function resetUserPassword(
-  identifier: string,
-  newPasswordPlain: string
-): Promise<boolean> {
-  const users = await getAllUsers();
-  const lower = identifier.toLowerCase();
+  // Then try username (case-sensitive, as stored)
+  const byUsername = users.find((u) => u.username === normalized);
+  if (byUsername) return byUsername;
 
-  const idx = users.findIndex(
-    (u) =>
-      u.email.toLowerCase() === lower ||
-      u.username.toLowerCase() === lower
-  );
-
-  if (idx === -1) {
-    return false;
-  }
-
-  const newHash = await argon2.hash(newPasswordPlain);
-  users[idx] = { ...users[idx], passwordHash: newHash };
-
-  await saveUsersEncrypted(users);
-  return true;
+  return null;
 }
