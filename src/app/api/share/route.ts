@@ -1,32 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
+
 import { getUserFromRequest } from '@/lib/authSession';
 import { getMediaById } from '@/lib/mediaStore';
 import {
-  getUserByEmail,
-  getUserByUsername,
-  type User,
-} from '@/lib/userStore';
-import { createShare } from '@/lib/shareStore';
+  createShare,
+  findUserByEmailOrUsername,
+} from '@/lib/shareStore';
 
-async function findRecipientUser(recipient: string): Promise<User | null> {
-  const normalized = recipient.trim().replace(/^@/, '');
-
-  const byUsername = await getUserByUsername(normalized);
-  if (byUsername) return byUsername;
-
-  const byEmail = await getUserByEmail(normalized);
-  if (byEmail) return byEmail;
-
-  return null;
-}
-
-// POST /api/share
 export async function POST(req: NextRequest) {
   try {
-    const senderUser = await getUserFromRequest(req);
-    if (!senderUser) {
+    const sender = await getUserFromRequest(req);
+    if (!sender) {
       return NextResponse.json(
-        { valid: false, error: 'Not authenticated.' },
+        { ok: false, error: 'Not authenticated.' },
         { status: 401 }
       );
     }
@@ -34,20 +20,16 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => null);
     if (!body) {
       return NextResponse.json(
-        { valid: false, error: 'Invalid JSON body.' },
+        { ok: false, error: 'Invalid JSON.' },
         { status: 400 }
       );
     }
 
-    const { mediaId, recipient, downloadable } = body as {
-      mediaId?: string;
-      recipient?: string;
-      downloadable?: boolean;
-    };
+    const { mediaId, recipient, downloadable } = body;
 
     if (!mediaId || !recipient) {
       return NextResponse.json(
-        { valid: false, error: 'mediaId and recipient are required.' },
+        { ok: false, error: 'mediaId and recipient required.' },
         { status: 400 }
       );
     }
@@ -55,47 +37,44 @@ export async function POST(req: NextRequest) {
     const media = await getMediaById(mediaId);
     if (!media) {
       return NextResponse.json(
-        { valid: false, error: 'Media not found.' },
+        { ok: false, error: 'Media not found.' },
         { status: 404 }
       );
     }
 
-    const recipientUser = await findRecipientUser(recipient);
+    // Resolve recipient
+    const recipientUser = await findUserByEmailOrUsername(recipient);
     if (!recipientUser) {
       return NextResponse.json(
         {
-          valid: false,
+          ok: false,
           error:
-            'Recipient not found. They must be a registered username or email.',
+            'Recipient not found. Must be an existing username or email.',
         },
         { status: 400 }
       );
     }
 
+    // Create ONE clean share record
     const share = await createShare({
       mediaId: media.id,
       recipient: recipientUser.username || recipientUser.email,
       downloadable: downloadable ?? true,
-      sender: senderUser.username || senderUser.email,
-      mediaTitle: media.title || media.fileName || '(untitled)',
-      mediaType: media.type,
+      sender: sender.username || sender.email,
     });
 
     return NextResponse.json(
       {
-        valid: true,
-        shareId: share.id,
+        ok: true,
+        shareId: share.shareId,
         packageId: share.packageId,
       },
       { status: 200 }
     );
   } catch (err) {
-    console.error('[POST /api/share] Internal error:', err);
+    console.error('[POST /api/share] error:', err);
     return NextResponse.json(
-      {
-        valid: false,
-        error: 'Internal server error while creating share.',
-      },
+      { ok: false, error: 'Internal server error.' },
       { status: 500 }
     );
   }

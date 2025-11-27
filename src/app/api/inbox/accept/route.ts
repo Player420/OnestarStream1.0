@@ -1,18 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUserFromRequest } from '@/lib/authSession';
-import { getShareById, markShareAccepted } from '@/lib/shareStore';
-import { getMediaById } from '@/lib/mediaStore';
+
+import {
+  getShareById,
+  markShareAccepted,
+} from '@/lib/shareStore';
+
+import {
+  getMediaById,
+  getMediaFilePath,
+  addMedia
+} from '@/lib/mediaStore';
+
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await getUserFromRequest(req);
-    if (!user) {
-      return NextResponse.json(
-        { ok: false, error: 'Not authenticated.' },
-        { status: 401 }
-      );
-    }
-
     const body = await req.json().catch(() => null);
     if (!body || !body.shareId) {
       return NextResponse.json(
@@ -21,8 +23,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { shareId } = body as { shareId: string };
+    const shareId = body.shareId;
 
+    // Require user auth
+    const user = await getUserFromRequest(req);
+    if (!user) {
+      return NextResponse.json(
+        { ok: false, error: 'Not authenticated.' },
+        { status: 401 }
+      );
+    }
+
+    // Load share
     const share = await getShareById(shareId);
     if (!share) {
       return NextResponse.json(
@@ -31,6 +43,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Load original media
     const media = await getMediaById(share.mediaId);
     if (!media) {
       return NextResponse.json(
@@ -39,17 +52,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Copy the file into recipient’s library (protected or not)
+    const filePath = getMediaFilePath(media);
+    const fileContents = await (await import('fs/promises')).readFile(filePath);
+
+    await addMedia({
+      title: media.title,
+      type: media.type,
+      sizeBytes: media.sizeBytes,
+      originalName: media.fileName,
+      contents: fileContents,
+      protected: !share.downloadable   // true => protected media folder
+    });
+
+    // Mark accepted
     await markShareAccepted(shareId);
 
-    // In your current architecture media.json is global,
-    // so we don't need to duplicate the file; accept just marks it.
     return NextResponse.json({ ok: true }, { status: 200 });
+
   } catch (err) {
-    console.error('[POST /api/inbox/accept] Internal error:', err);
+    console.error('[POST /api/inbox/accept] error:', err);
     return NextResponse.json(
-      { ok: false, error: 'Internal server error while accepting share.' },
+      { ok: false, error: 'Internal error while accepting share.' },
       { status: 500 }
     );
   }
 }
-
