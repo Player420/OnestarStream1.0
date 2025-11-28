@@ -243,6 +243,20 @@ export default function AppPage() {
                 ? `/api/protected-stream/${item.id}`
                 : `/media/${item.fileName}`;
 
+              // ---------- NEW: nice download name ----------
+              const ext = item.fileName.includes('.')
+                ? item.fileName.slice(item.fileName.lastIndexOf('.'))
+                : '';
+
+              const rawTitle = item.title || 'track';
+
+              // Strip characters that are illegal in filenames on common OSes
+              const safeTitle =
+                rawTitle.replace(/[\\/:*?"<>|]/g, '') || 'track';
+
+              const downloadName = `${safeTitle}${ext}`;
+              // ------------------------------------------------
+
               const handleDelete = async () => {
                 try {
                   const res = await fetch(`/api/media/${item.id}`, {
@@ -331,7 +345,7 @@ export default function AppPage() {
                   {/* Non-protected: Download + Share link button */}
                   {!item.protected && (
                     <>
-                      <a href={mediaUrl} download>
+                      <a href={mediaUrl} download={downloadName}>
                         ⬇ Download file
                       </a>
                       <button

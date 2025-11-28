@@ -30,3 +30,6 @@ media.json
 shares.json
 public/media/
 secure_media/
+.aider*
+.aider*
+users.enc.backup-*

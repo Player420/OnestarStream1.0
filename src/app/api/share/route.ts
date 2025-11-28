@@ -1,3 +1,4 @@
+// src/app/api/share/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { getUserFromRequest } from '@/lib/authSession';
 import { getMediaById } from '@/lib/mediaStore';
@@ -17,7 +18,7 @@ export async function POST(req: NextRequest) {
     if (!senderUser) {
       return NextResponse.json(
         { ok: false, error: 'Not authenticated.' },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
@@ -25,7 +26,7 @@ export async function POST(req: NextRequest) {
     if (!body) {
       return NextResponse.json(
         { ok: false, error: 'Invalid JSON body.' },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -38,24 +39,28 @@ export async function POST(req: NextRequest) {
     if (!mediaId || !recipient) {
       return NextResponse.json(
         { ok: false, error: 'mediaId and recipient are required.' },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    // Look up media being shared
+    // Look up the media being shared
     const media = await getMediaById(mediaId);
     if (!media) {
       return NextResponse.json(
         { ok: false, error: 'Media not found.' },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
-    // Resolve recipient user (username or email)
-    const normalized = normalizeRecipientIdentifier(recipient);
-    const byUsername = await getUserByUsername(normalized);
-    const byEmail = await getUserByEmail(normalized);
-    const recipientUser = byUsername || byEmail;
+    // Resolve recipient account (username or email)
+    const normalizedRecipient = normalizeRecipientIdentifier(recipient);
+
+    const userByUsername = await getUserByUsername(normalizedRecipient);
+    const userByEmail = userByUsername
+      ? null
+      : await getUserByEmail(normalizedRecipient);
+
+    const recipientUser = userByUsername ?? userByEmail;
 
     if (!recipientUser) {
       return NextResponse.json(
@@ -64,45 +69,39 @@ export async function POST(req: NextRequest) {
           error:
             'Recipient not found. They must be a registered username or email.',
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    const recipientAddress = recipientUser.username || recipientUser.email;
-    if (!recipientAddress) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: 'Recipient account is missing username/email.',
-        },
-        { status: 500 }
-      );
-    }
+    const resolvedRecipient = recipientUser.username || recipientUser.email;
 
-    // Cleanup: nuke any pending zombies for same media+recipient
-    await deleteSharesForMediaAndRecipient(media.id, recipientAddress);
+    // Clean out any old pending shares for the same media+recipient
+    await deleteSharesForMediaAndRecipient(media.id, resolvedRecipient);
 
-    // Create fresh share record
     const share = await createShare({
       mediaId: media.id,
-      recipient: recipientAddress,
+      recipient: resolvedRecipient,
       downloadable: downloadable ?? true,
-      sender: senderUser.username || senderUser.email || null,
+      sender: senderUser.username || senderUser.email,
+      mediaTitle: media.title || media.fileName || '(untitled)',
+      mediaType: media.type,
     });
 
     return NextResponse.json(
       {
         ok: true,
         shareId: share.shareId,
-        packageId: share.packageId,
       },
-      { status: 200 }
+      { status: 200 },
     );
   } catch (err) {
     console.error('[POST /api/share] Internal error:', err);
     return NextResponse.json(
-      { ok: false, error: 'Internal server error while creating share.' },
-      { status: 500 }
+      {
+        ok: false,
+        error: 'Internal server error while creating share.',
+      },
+      { status: 500 },
     );
   }
 }

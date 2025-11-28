@@ -63,6 +63,7 @@ export async function POST(req: NextRequest) {
       originalName: media.fileName,
       contents: fileContents,
       protected: !share.downloadable   // true => protected media folder
+    , ownerId: user.id
     });
 
     // Mark accepted

@@ -1,47 +1,57 @@
+/* src/app/api/inbox/dismiss/route.ts */
 import { NextRequest, NextResponse } from 'next/server';
-import { markShareAccepted } from '@/lib/shareStore';
-import { acceptSharedPackage } from '@/server/accept';
+import { getUserFromRequest } from '@/lib/authSession';
+
+import {
+  getShareById,
+  markShareRejected
+} from '@/lib/shareStore';
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-
-    const { shareId, packageId, downloadable } = body;
-
-    if (!shareId || !packageId) {
+    const user = await getUserFromRequest(req);
+    if (!user) {
       return NextResponse.json(
-        { ok: false, error: 'Missing shareId or packageId' },
+        { ok: false, error: 'Not authenticated.' },
+        { status: 401 }
+      );
+    }
+
+    const body = await req.json().catch(() => null);
+    const shareId = body?.shareId;
+
+    if (!shareId) {
+      return NextResponse.json(
+        { ok: false, error: 'shareId is required.' },
         { status: 400 }
       );
     }
 
-    // 1. Mark share as accepted in shares.json
-    const updated = await markShareAccepted(shareId);
-    if (!updated) {
-      return NextResponse.json(
-        { ok: false, error: 'Share not found' },
-        { status: 404 }
-      );
+    // Load the share
+    const share = await getShareById(shareId);
+    if (!share) {
+      // Zombie row → pretend success but nothing to do
+      return NextResponse.json({ ok: true, cleared: true }, { status: 200 });
     }
 
-    // 2. Actually copy the media file into the user's library
-    const result = await acceptSharedPackage({
-      packageId,
-      downloadable: downloadable ?? true,
-    });
-
-    if (!result.ok) {
+    // Reject the share
+    const updated = await markShareRejected(shareId);
+    if (!updated) {
       return NextResponse.json(
-        { ok: false, error: result.error },
+        { ok: false, error: 'Failed to reject share.' },
         { status: 500 }
       );
     }
 
-    return NextResponse.json({ ok: true, share: updated }, { status: 200 });
-  } catch (err) {
-    console.error('Error accepting share:', err);
     return NextResponse.json(
-      { ok: false, error: 'Server error accepting share' },
+      { ok: true, shareId },
+      { status: 200 }
+    );
+
+  } catch (err) {
+    console.error('[POST /api/inbox/dismiss] Internal error:', err);
+    return NextResponse.json(
+      { ok: false, error: 'Internal server error.' },
       { status: 500 }
     );
   }

@@ -1,20 +1,21 @@
+// src/lib/shareStore.ts
 import fs from 'fs/promises';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import type { MediaType } from './mediaStore';
 
 export interface ShareRecord {
-  id: string;                // stable share ID used everywhere
-  mediaId: string;           // ID of the original media item
-  recipient: string;         // username or email of recipient
-  downloadable: boolean;     // whether recipient can download
-  packageId: string;         // logical package/batch ID
+  shareId: string;
+  mediaId: string;
+  recipient: string;
+  downloadable: boolean;
+  packageId: string;
   createdAt: string;
   acceptedAt: string | null;
-  rejectedAt: string | null;
-  sender: string | null;     // username/email of sender (for UI)
-  mediaTitle: string;        // copied from media at share time
-  mediaType: MediaType;      // 'audio' | 'video' | 'image'
+  rejectedAt?: string | null;
+  sender: string | null;
+  mediaTitle?: string | null;
+  mediaType?: MediaType | null;
 }
 
 const SHARE_PATH = path.join(process.cwd(), 'shares.json');
@@ -54,23 +55,20 @@ async function saveAllShares(shares: ShareRecord[]) {
 
 /* -------------------------------------------------------
    Normalize raw object → ShareRecord
-   Handles older shapes { shareId, ... } or { id, ... }
 ---------------------------------------------------------*/
 function normalizeShare(raw: any): ShareRecord {
-  const id = raw.id ?? raw.shareId ?? randomUUID();
-
   return {
-    id,
+    shareId: raw.shareId ?? raw.id ?? randomUUID(),
     mediaId: raw.mediaId,
     recipient: raw.recipient,
     downloadable: raw.downloadable ?? true,
-    packageId: raw.packageId ?? `pkg_${raw.mediaId ?? id}`,
+    packageId: raw.packageId ?? `pkg_${raw.mediaId}`,
     createdAt: raw.createdAt ?? new Date().toISOString(),
     acceptedAt: raw.acceptedAt ?? null,
     rejectedAt: raw.rejectedAt ?? null,
     sender: raw.sender ?? null,
-    mediaTitle: raw.mediaTitle ?? raw.title ?? '(untitled)',
-    mediaType: (raw.mediaType as MediaType) ?? 'audio',
+    mediaTitle: raw.mediaTitle ?? null,
+    mediaType: (raw.mediaType as MediaType | null) ?? null,
   };
 }
 
@@ -90,13 +88,13 @@ export async function createShare(input: {
   recipient: string;
   downloadable: boolean;
   sender: string | null;
-  mediaTitle: string;
-  mediaType: MediaType;
+  mediaTitle?: string | null;
+  mediaType?: MediaType | null;
 }): Promise<ShareRecord> {
   const shares = await getAllSharesNormalized();
 
   const share: ShareRecord = {
-    id: randomUUID(),
+    shareId: randomUUID(),
     mediaId: input.mediaId,
     recipient: input.recipient,
     downloadable: input.downloadable,
@@ -105,8 +103,8 @@ export async function createShare(input: {
     acceptedAt: null,
     rejectedAt: null,
     sender: input.sender ?? null,
-    mediaTitle: input.mediaTitle,
-    mediaType: input.mediaType,
+    mediaTitle: input.mediaTitle ?? null,
+    mediaType: input.mediaType ?? null,
   };
 
   shares.push(share);
@@ -116,31 +114,40 @@ export async function createShare(input: {
 }
 
 /* -------------------------------------------------------
-   List shares for a given user
+   List shares for a given user (only pending, non-zombie)
 ---------------------------------------------------------*/
 export async function listSharesForRecipient(
   recipient: string
 ): Promise<ShareRecord[]> {
   const shares = await getAllSharesNormalized();
-  return shares.filter((s) => s.recipient === recipient);
+
+  return shares.filter(
+    (s) =>
+      s.recipient === recipient &&
+      !s.acceptedAt &&
+      !s.rejectedAt &&
+      !!s.mediaId // ignore totally corrupt rows
+  );
 }
 
 /* -------------------------------------------------------
    Get a specific share by ID
 ---------------------------------------------------------*/
-export async function getShareById(id: string): Promise<ShareRecord | null> {
+export async function getShareById(
+  shareId: string
+): Promise<ShareRecord | null> {
   const shares = await getAllSharesNormalized();
-  return shares.find((s) => s.id === id) ?? null;
+  return shares.find((s) => s.shareId === shareId) ?? null;
 }
 
 /* -------------------------------------------------------
    Mark share as accepted
 ---------------------------------------------------------*/
 export async function markShareAccepted(
-  id: string
+  shareId: string
 ): Promise<ShareRecord | null> {
   const shares = await getAllSharesNormalized();
-  const idx = shares.findIndex((s) => s.id === id);
+  const idx = shares.findIndex((s) => s.shareId === shareId);
   if (idx === -1) return null;
 
   const updated: ShareRecord = {
@@ -155,13 +162,13 @@ export async function markShareAccepted(
 }
 
 /* -------------------------------------------------------
-   Mark share as rejected (DISMISS)
+   Mark share as rejected (dismiss)
 ---------------------------------------------------------*/
 export async function markShareRejected(
-  id: string
+  shareId: string
 ): Promise<ShareRecord | null> {
   const shares = await getAllSharesNormalized();
-  const idx = shares.findIndex((s) => s.id === id);
+  const idx = shares.findIndex((s) => s.shareId === shareId);
   if (idx === -1) return null;
 
   const updated: ShareRecord = {
@@ -173,4 +180,38 @@ export async function markShareRejected(
   shares[idx] = updated;
   await saveAllShares(shares);
   return updated;
+}
+
+/* -------------------------------------------------------
+   HARD DELETE shares by mediaId + recipient
+   (used to nuke legacy/zombie rows with bad IDs)
+---------------------------------------------------------*/
+export async function deleteSharesForMediaAndRecipient(
+  mediaId: string,
+  recipient: string
+): Promise<number> {
+  const shares = await getAllSharesNormalized();
+
+  const kept: ShareRecord[] = [];
+  let removed = 0;
+
+  for (const s of shares) {
+    const isZombieCandidate =
+      s.mediaId === mediaId &&
+      s.recipient === recipient &&
+      !s.acceptedAt &&
+      !s.rejectedAt;
+
+    if (isZombieCandidate) {
+      removed += 1;
+      continue;
+    }
+    kept.push(s);
+  }
+
+  if (removed > 0) {
+    await saveAllShares(kept);
+  }
+
+  return removed;
 }
