@@ -30,7 +30,7 @@ export function createOnestarPackage(metadata: any, encryptedBytes: Uint8Array):
     meta: metadata,
     contents: Buffer.from(encryptedBytes).toString('base64'),
 
-  };
+};
   return Buffer.from(JSON.stringify(packageData), 'utf8');
 }
 

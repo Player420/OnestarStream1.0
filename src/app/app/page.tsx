@@ -2,7 +2,7 @@
 
 import { useEffect, useState, FormEvent } from 'react';
 import { redirect } from 'next/navigation';
-import { CurrentUserBadge } from "@/components/CurrentUserBadge";
+import { CurrentUserBadge } from '@/components/CurrentUserBadge';
 
 function HamburgerMenu({ onDelete }: { onDelete: () => void }) {
   const [open, setOpen] = useState(false);
@@ -18,7 +18,7 @@ function HamburgerMenu({ onDelete }: { onDelete: () => void }) {
             background: 'white',
             border: '1px solid #ddd',
             borderRadius: 4,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
             zIndex: 1,
           }}
         >
@@ -407,6 +407,8 @@ export default function AppPage() {
                 margin: 0,
                 marginBottom: 8,
                 color: '#ff80c8',
+                wordBreak: 'break-word',
+                overflowWrap: 'break-word',
               }}
             >
               Share “{shareItem.title || '(untitled)'}”

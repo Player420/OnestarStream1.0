@@ -33,3 +33,6 @@ secure_media/
 .aider*
 .aider*
 users.enc.backup-*
+.aider.chat.history.md
+.aider.input.history
+.aider.tags.cache.v4/
