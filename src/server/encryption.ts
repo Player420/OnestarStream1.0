@@ -69,7 +69,7 @@ export function createOnestarPackage(meta: object, encryptedBytes: Buffer): Buff
 /**
  * Parse a .onestar package buffer.
  */
-export function parseOnestarPackage(buffer: ArrayBuffer): {
+export function parseOnestarPackage(buffer: ArrayBuffer | SharedArrayBuffer): {
   meta: any;
   contents: Buffer;
 } {
