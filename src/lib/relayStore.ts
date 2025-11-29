@@ -19,7 +19,7 @@ export async function uploadEncryptedTrack(
 ): Promise<void> {
   await ensureDirectories();
   const filePath = path.join(RELAY_OUTBOX_DIR, `${id}.onestar`);
-  await fs.writeFile(filePath, encrypted);
+  await fs.writeFile(filePath, Buffer.from(encrypted));
 }
 
 export async function downloadEncryptedTrack(
@@ -30,7 +30,7 @@ export async function downloadEncryptedTrack(
   try {
     return await fs.readFile(filePath);
   } catch (err: unknown) {
-    if (err && typeof err === 'object' && 'code' in err) {
+    if (err instanceof Error && 'code' in err) {
       const code = (err as { code?: string }).code;
       if (code === 'ENOENT') return null;
     }

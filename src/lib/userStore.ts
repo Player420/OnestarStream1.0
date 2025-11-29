@@ -44,8 +44,8 @@ async function loadUsersEncrypted(): Promise<User[]> {
     ]);
 
     return JSON.parse(decrypted.toString('utf8')) as User[];
-  } catch (err: any) {
-    if (err?.code === 'ENOENT') {
+  } catch (err: unknown) {
+    if (err instanceof Error && 'code' in err) {
       // No file yet -> no users yet
       return [];
     }
