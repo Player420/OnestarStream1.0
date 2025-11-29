@@ -56,7 +56,7 @@ export async function acceptSharedPackage(
     pkgBuffer.byteOffset + pkgBuffer.byteLength
   );
 
-  const { meta, contents } = parseOnestarPackage(arrayBufferView) as {
+  const { meta, contents } = parseOnestarPackage(arrayBufferView as ArrayBuffer) as {
     meta: OnestarPackageMetaV1;
     contents: Buffer;
   };
