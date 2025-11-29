@@ -215,3 +215,22 @@ export async function deleteSharesForMediaAndRecipient(
 
   return removed;
 }
+
+/* -------------------------------------------------------
+   HARD DELETE a single share by shareId
+   (used by inbox delete route)
+---------------------------------------------------------*/
+export async function deleteShareById(shareId: string): Promise<boolean> {
+  const shares = await getAllSharesNormalized();
+  const originalLength = shares.length;
+
+  const kept = shares.filter((s) => s.shareId !== shareId);
+
+  if (kept.length === originalLength) {
+    // nothing deleted (share not found)
+    return false;
+  }
+
+  await saveAllShares(kept);
+  return true;
+}

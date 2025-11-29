@@ -28,7 +28,8 @@ export function decryptMedia(buffer: Uint8Array, password: string, iv: Buffer, a
 export function createOnestarPackage(metadata: any, encryptedBytes: Uint8Array): Buffer {
   const packageData = {
     meta: metadata,
-    contents: encryptedBytes.toString('base64'),
+    contents: Buffer.from(encryptedBytes).toString('base64'),
+
   };
   return Buffer.from(JSON.stringify(packageData), 'utf8');
 }

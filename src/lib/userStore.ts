@@ -9,12 +9,18 @@ import {
 } from 'crypto';
 import argon2 from 'argon2';
 
+export type LicenseStatus = 'active' | 'revoked' | 'expired' | 'none';
+
 export interface User {
   id: string;
   email: string;
   username: string;
   passwordHash: string;
   createdAt: string;
+
+  // Licensing
+  licenseKey?: string | null;
+  licenseStatus?: LicenseStatus; // if undefined, treat as 'none' for stricter checks
 }
 
 const USERS_ENC_PATH = path.join(process.cwd(), 'users.enc');
@@ -103,6 +109,8 @@ export async function createUser(
     username,
     passwordHash,
     createdAt: new Date().toISOString(),
+    licenseKey: null,
+    licenseStatus: 'none',
   };
 
   const users = await getAllUsers();
@@ -146,4 +154,114 @@ export async function findUserByEmailOrUsername(
   if (byUsername) return byUsername;
 
   return null;
+}
+
+/**
+ * Internal helpers for licensing and user lookup
+ */
+
+function generateLicenseKey(): string {
+  // 16 random bytes -> 32 hex chars, grouped like XXXX-XXXX-...
+  const raw = randomBytes(16).toString('hex').toUpperCase();
+  const groups = raw.match(/.{1,4}/g) ?? [raw];
+  return groups.join('-');
+}
+
+function isUserLicensed(user: User): boolean {
+  // Strict: require both licenseKey and status === 'active'
+  if (!user.licenseKey) return false;
+  if (!user.licenseStatus) return false;
+  return user.licenseStatus === 'active';
+}
+
+async function findUserRecordAndIndex(
+  identifier: string
+): Promise<{ users: User[]; index: number; user: User }> {
+  const users = await getAllUsers();
+  const normalized = identifier.trim().replace(/^@/, '');
+  const lower = normalized.toLowerCase();
+
+  const index = users.findIndex(
+    (u) =>
+      u.email.toLowerCase() === lower ||
+      u.username === normalized
+  );
+
+  if (index === -1) {
+    throw new Error(`User not found for identifier: ${identifier}`);
+  }
+
+  return { users, index, user: users[index] };
+}
+
+/**
+ * Reset a user's password, but ONLY if they have an active license.
+ *
+ * `identifier` can be email, username, or @username.
+ */
+export async function resetUserPassword(
+  identifier: string,
+  newPasswordPlain: string
+): Promise<User> {
+  const { users, index, user } = await findUserRecordAndIndex(identifier);
+
+  if (!isUserLicensed(user)) {
+    throw new Error(
+      `User ${identifier} does not have an active license; password reset denied.`
+    );
+  }
+
+  const newPasswordHash = await argon2.hash(newPasswordPlain);
+
+  const updatedUser: User = {
+    ...user,
+    passwordHash: newPasswordHash,
+  };
+
+  users[index] = updatedUser;
+  await saveUsersEncrypted(users);
+
+  return updatedUser;
+}
+
+/**
+ * Issue (or re-issue) a license to a user.
+ * Returns the updated user and the license key you can give them.
+ */
+export async function issueLicenseToUser(
+  identifier: string
+): Promise<{ user: User; licenseKey: string }> {
+  const { users, index, user } = await findUserRecordAndIndex(identifier);
+
+  const licenseKey = generateLicenseKey();
+
+  const updatedUser: User = {
+    ...user,
+    licenseKey,
+    licenseStatus: 'active',
+  };
+
+  users[index] = updatedUser;
+  await saveUsersEncrypted(users);
+
+  return { user: updatedUser, licenseKey };
+}
+
+/**
+ * Revoke a user's license (but keep their account).
+ */
+export async function revokeLicenseForUser(
+  identifier: string
+): Promise<User> {
+  const { users, index, user } = await findUserRecordAndIndex(identifier);
+
+  const updatedUser: User = {
+    ...user,
+    licenseStatus: 'revoked',
+  };
+
+  users[index] = updatedUser;
+  await saveUsersEncrypted(users);
+
+  return updatedUser;
 }
