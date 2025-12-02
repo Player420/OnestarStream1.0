@@ -1,0 +1,35 @@
+# Node / Next / build artifacts
+node_modules/
+.next/
+dist/
+out/
+build/
+
+# Local runtime data (per-user, not in repo)
+onestar_data/
+users.enc
+shares.json
+
+# Media uploaded via the app (each user has their own anyway)
+public/media/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Encrypted user store
+users.enc
+
+# Local media + shares on this machine
+media.json
+shares.json
+public/media/
+secure_media/
+.aider*
+.aider*
+users.enc.backup-*
