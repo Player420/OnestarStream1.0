@@ -33,3 +33,5 @@ secure_media/
 .aider*
 .aider*
 users.enc.backup-*
+backup/
+localdata/

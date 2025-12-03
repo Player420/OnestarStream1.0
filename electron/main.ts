@@ -8,9 +8,10 @@ import path from 'path';
 app.disableHardwareAcceleration();
 
 // Single source of truth for the app URL.
-// In dev:  ONESTAR_APP_URL=http://137.184.46.163:3002 npm run dev:electron
-// Fallback: http://localhost:3002
-const APP_URL = process.env.ONESTAR_APP_URL || 'http://localhost:3000';
+// Dev:  ONESTAR_APP_URL=http://localhost:3000 npm run dev:electron
+// Prod: falls back to your DO droplet on port 3002.
+const APP_URL =
+  process.env.ONESTAR_APP_URL || 'http://137.184.46.163:3002';
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -44,4 +45,3 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
-
