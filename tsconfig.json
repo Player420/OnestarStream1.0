@@ -24,11 +24,17 @@
   },
   "include": [
     "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
+    "src",
+    "middleware.ts",
     ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    ".next/dev/types/**/*.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "electron",
+    "electron/**/*",
+    "node_modules",
+    "dist",
+    "dist-electron",
+    "**/*.test.ts"
+  ]
 }

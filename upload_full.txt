@@ -5,45 +5,79 @@ import { redirect } from 'next/navigation';
 
 type MediaType = 'audio' | 'video' | 'image';
 
+declare global {
+  interface Window {
+    onestar?: {
+      saveMedia?: (opts: {
+        file: File;
+        title: string;
+        type: MediaType;
+        downloadable: boolean;
+      }) => Promise<{ ok: boolean; id?: string; fileName?: string }>;
+    };
+  }
+}
 
 export default function UploadPage() {
+  // -------------------------------
+  // AUTH GATE – ALWAYS FIRST HOOKS
+  // -------------------------------
   const [auth, setAuth] = useState<boolean | null>(null);
 
   useEffect(() => {
     fetch('/api/auth/me', { cache: 'no-store' })
-      .then(r => r.json())
-      .then(d => setAuth(!!d.user))
+      .then((res) => res.json())
+      .then((data) => setAuth(!!data.user))
       .catch(() => setAuth(false));
   }, []);
 
+  // -------------------------------
+  // OTHER LOCAL STATE HOOKS
+  // -------------------------------
   const [status, setStatus] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+
+  // Raw progress target (0–100)
   const [progress, setProgress] = useState(0);
+  // Smoothed visual progress for the bar
   const [displayProgress, setDisplayProgress] = useState(0);
+  // For fake progress when using Electron bridge
   const fakeTimerRef = useRef<number | null>(null);
 
+  // Smoothly animate `displayProgress` toward `progress`
   useEffect(() => {
     if (!uploading) return;
 
-    let frame: number;
+    let frameId: number;
 
     const animate = () => {
-      setDisplayProgress(prev => {
-        const diff = progress - prev;
-        if (Math.abs(diff) < 0.1) return progress;
+      setDisplayProgress((prev) => {
+        const target = progress;
+        const diff = target - prev;
+        if (Math.abs(diff) < 0.1) {
+          return target;
+        }
+        // Ease toward target
         return prev + diff * 0.2;
       });
 
-      frame = requestAnimationFrame(animate);
+      frameId = window.requestAnimationFrame(animate);
     };
 
-    frame = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(frame);
+    frameId = window.requestAnimationFrame(animate);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
   }, [uploading, progress]);
 
+  // Cleanup fake timer on unmount
   useEffect(() => {
     return () => {
-      if (fakeTimerRef.current !== null) clearInterval(fakeTimerRef.current);
+      if (fakeTimerRef.current !== null) {
+        window.clearInterval(fakeTimerRef.current);
+        fakeTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -62,74 +96,45 @@ export default function UploadPage() {
     const type = (formData.get('type') as MediaType) || 'audio';
     const downloadable = formData.get('downloadable') === 'on';
 
-    setUploading(true);
     setStatus('Uploading…');
+    setUploading(true);
     setProgress(0);
     setDisplayProgress(0);
 
-    const stopFake = () => {
+    // Helper to stop any fake progress timer
+    const stopFakeTimer = () => {
       if (fakeTimerRef.current !== null) {
-        clearInterval(fakeTimerRef.current);
+        window.clearInterval(fakeTimerRef.current);
         fakeTimerRef.current = null;
       }
     };
 
     try {
-      const w = window as any;
-
-      if (
-        w.onestar?.startChunkedSave &&
-        w.onestar?.appendChunk &&
-        w.onestar?.finishChunkedSave
-      ) {
-        stopFake();
+      // -------------------------------------------
+      // PATH 1: Electron (serverless local storage)
+      // -------------------------------------------
+      if (typeof window !== 'undefined' && window.onestar?.saveMedia) {
+        // Start a fake progress timer that slowly approaches ~90%
+        stopFakeTimer();
         fakeTimerRef.current = window.setInterval(() => {
-          setProgress(prev => (prev < 90 ? prev + 1 : prev));
+          setProgress((prev) => {
+            if (prev >= 90) return prev;
+            return prev + 1;
+          });
         }, 150);
 
-        // FIXED ARGUMENT SHAPE — DO NOT SEND File OBJECT
-        const start = await w.onestar.startChunkedSave({
-          originalName: file.name,       // REQUIRED by main.ts
+        const result = await window.onestar.saveMedia({
+          file,
           title,
           type,
-          downloadable
+          downloadable,
         });
 
-        if (!start?.ok || !start.sessionId) {
-          stopFake();
-          setStatus('Upload failed (start)');
-          setUploading(false);
-          return;
-        }
-
-        const sessionId = start.sessionId;
-
-        // Chunking loop
-        const chunkSize = 1024 * 1024 * 2; // 2MB
-        let offset = 0;
-
-        while (offset < file.size) {
-          const slice = file.slice(offset, offset + chunkSize);
-          const chunk = new Uint8Array(await slice.arrayBuffer());
-
-          const res = await w.onestar.appendChunk({ sessionId, chunk });
-          if (!res.ok) {
-            stopFake();
-            setStatus('Upload failed (append)');
-            setUploading(false);
-            return;
-          }
-
-          offset += chunkSize;
-          setProgress((offset / file.size) * 100);
-        }
-
-        const finish = await w.onestar.finishChunkedSave({ sessionId });
-        stopFake();
+        stopFakeTimer();
         setProgress(100);
 
-        if (!finish?.ok) {
-          setStatus('Upload failed (finish)');
+        if (!result?.ok) {
+          setStatus('Upload failed');
           return;
         }
 
@@ -138,25 +143,34 @@ export default function UploadPage() {
         return;
       }
 
-      // Fallback XHR (unchanged)
+      // -------------------------------------------
+      // PATH 2: Fallback – upload to droplet via XHR
+      // -------------------------------------------
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/media');
 
-        xhr.upload.onprogress = evt => {
-          if (evt.lengthComputable) {
-            setProgress((evt.loaded / evt.total) * 100);
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            const percent = (event.loaded / event.total) * 100;
+            setProgress(percent);
           }
         };
 
-        xhr.onerror = () => reject(new Error('XHR error'));
+        xhr.onerror = () => {
+          reject(new Error('XHR upload error'));
+        };
 
         xhr.onload = () => {
           if (xhr.status >= 200 && xhr.status < 300) {
             setProgress(100);
             resolve();
           } else {
-            reject(new Error(xhr.responseText));
+            reject(
+              new Error(
+                `Upload failed with status ${xhr.status}: ${xhr.responseText || ''}`
+              )
+            );
           }
         };
 
@@ -166,20 +180,32 @@ export default function UploadPage() {
       setStatus('Uploaded!');
       form.reset();
     } catch (err) {
-      console.error(err);
+      console.error('Upload failed:', err);
       setStatus('Upload failed');
     } finally {
+      stopFakeTimer();
       setTimeout(() => {
         setUploading(false);
         setProgress(0);
         setDisplayProgress(0);
-      }, 400);
+      }, 400); // small delay so bar can finish nicely
     }
   }
 
-  if (auth === null) return <main style={{ padding: 24 }}>Checking session…</main>;
-  if (auth === false) redirect('/auth/signin');
+  // -------------------------------
+  // AUTH-BASED RENDER BRANCHES
+  // -------------------------------
+  if (auth === null) {
+    return <main style={{ padding: 24 }}>Checking session…</main>;
+  }
 
+  if (auth === false) {
+    redirect('/auth/signin');
+  }
+
+  // -------------------------------
+  // UPLOAD UI (UNCHANGED STYLING)
+  // -------------------------------
   return (
     <main style={{ maxWidth: 600, margin: '0 auto', padding: 16 }}>
       <h1>OnestarStream – Upload</h1>
@@ -219,6 +245,7 @@ export default function UploadPage() {
         </button>
       </form>
 
+      {/* Magenta progress bar with smooth width animation */}
       {uploading && (
         <div
           style={{
@@ -227,15 +254,19 @@ export default function UploadPage() {
             height: 6,
             borderRadius: 999,
             background: '#f3e0f7',
-            overflow: 'hidden'
+            overflow: 'hidden',
           }}
         >
           <div
             style={{
-              width: `${Math.min(100, Math.max(displayProgress, 5))}%`,
+              // Ensure it never shows as 0 when uploading; and clamp at 100
+              width: `${Math.min(
+                100,
+                Math.max(displayProgress, 5)
+              )}%`,
               height: '100%',
               background: '#6833c5ff',
-              transition: 'width 120ms linear'
+              transition: 'width 120ms linear',
             }}
           />
         </div>
@@ -249,3 +280,4 @@ export default function UploadPage() {
     </main>
   );
 }
+

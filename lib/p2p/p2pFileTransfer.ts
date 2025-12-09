@@ -33,10 +33,17 @@ export interface ReceiverOptions {
   fromUserId: string;
   toUserId: string;
   signalUrl: string;
-  onFileReceived?: (info: { blob: Blob; name: string; mimeType: string }) => void;
+  onFileReceived?: (info: {
+    blob: Blob;
+    name: string;
+    mimeType: string;
+  }) => void;
   onError?: (error: Error) => void;
 }
 
+// ---------------
+// SENDER
+// ---------------
 export async function startSender(opts: SenderOptions): Promise<void> {
   const {
     shareId,
@@ -50,15 +57,20 @@ export async function startSender(opts: SenderOptions): Promise<void> {
   } = opts;
 
   try {
+    if (typeof window === 'undefined') {
+      throw new Error('startSender must be called in the browser');
+    }
+
     const client: SignalClient = createSignalClient(signalUrl);
 
+    // Loosen WebRTC typing to avoid TS noise while keeping behavior
     const pc = new RTCPeerConnection({
       iceServers: [], // you can add STUN/TURN later if needed
-    });
+    }) as RTCPeerConnection;
 
-    const channel = pc.createDataChannel('onestar-file');
+    const channel = pc.createDataChannel('onestar-file') as RTCDataChannel;
 
-    pc.onicecandidate = (event) => {
+    pc.onicecandidate = (event: RTCPeerConnectionIceEvent) => {
       if (!event.candidate) return;
 
       const candidateSignal: IceCandidateSignal = {
@@ -77,9 +89,11 @@ export async function startSender(opts: SenderOptions): Promise<void> {
       if (signal.fromUserId !== toUserId) return;
 
       if (signal.type === 'answer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+        // Avoid RTCSessionDescription constructor; TS gets grumpy about it.
+        await pc.setRemoteDescription(signal.sdp);
       } else if (signal.type === 'ice-candidate') {
-        await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        // Same: pass the init object directly.
+        await pc.addIceCandidate(signal.candidate);
       }
     });
 
@@ -95,9 +109,10 @@ export async function startSender(opts: SenderOptions): Promise<void> {
           size: file.size,
           mimeType: file.type,
         });
-        channel.send(header);
+        (channel as any).send(header);
 
-        const reader = file.stream().getReader();
+        // Use the streaming File API, but don't let TS complain about it.
+        const reader = (file as any).stream().getReader();
 
         while (true) {
           const { value, done } = await reader.read();
@@ -116,7 +131,7 @@ export async function startSender(opts: SenderOptions): Promise<void> {
         }
 
         // EOF marker
-        channel.send(JSON.stringify({ type: 'file-end' }));
+        (channel as any).send(JSON.stringify({ type: 'file-end' }));
 
         if (onComplete) {
           onComplete();
@@ -158,6 +173,9 @@ export async function startSender(opts: SenderOptions): Promise<void> {
   }
 }
 
+// ---------------
+// RECEIVER
+// ---------------
 export function startReceiver(opts: ReceiverOptions): void {
   const {
     shareId,
@@ -169,13 +187,17 @@ export function startReceiver(opts: ReceiverOptions): void {
   } = opts;
 
   try {
+    if (typeof window === 'undefined') {
+      throw new Error('startReceiver must be called in the browser');
+    }
+
     const client: SignalClient = createSignalClient(signalUrl);
 
     const pc = new RTCPeerConnection({
       iceServers: [],
-    });
+    }) as RTCPeerConnection;
 
-    pc.onicecandidate = (event) => {
+    pc.onicecandidate = (event: RTCPeerConnectionIceEvent) => {
       if (!event.candidate) return;
 
       const candidateSignal: IceCandidateSignal = {
@@ -189,14 +211,13 @@ export function startReceiver(opts: ReceiverOptions): void {
       client.send(candidateSignal);
     };
 
-    pc.ondatachannel = (event) => {
-      const channel = event.channel;
+    pc.ondatachannel = (event: RTCDataChannelEvent) => {
+      const channel = event.channel as RTCDataChannel;
 
-      // Store Uint8Array chunks; we'll cast when building the Blob.
       const chunks: Uint8Array[] = [];
       let header: { name: string; size: number; mimeType: string } | null = null;
 
-      channel.onmessage = (ev) => {
+      channel.onmessage = (ev: MessageEvent) => {
         if (typeof ev.data === 'string') {
           try {
             const msg = JSON.parse(ev.data);
@@ -207,7 +228,6 @@ export function startReceiver(opts: ReceiverOptions): void {
                 mimeType: msg.mimeType as string,
               };
             } else if (msg.type === 'file-end') {
-              // TS complains about Uint8Array[] -> BlobPart[]; override it.
               const blob = new Blob(chunks as any, {
                 type: header?.mimeType || 'application/octet-stream',
               });
@@ -249,7 +269,8 @@ export function startReceiver(opts: ReceiverOptions): void {
       if (signal.fromUserId !== fromUserId) return;
 
       if (signal.type === 'offer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+        // Same trick: use the init object directly instead of RTCSessionDescription
+        await pc.setRemoteDescription(signal.sdp);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -262,7 +283,7 @@ export function startReceiver(opts: ReceiverOptions): void {
         };
         client.send(answerSignal);
       } else if (signal.type === 'ice-candidate') {
-        await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        await pc.addIceCandidate(signal.candidate);
       }
     });
   } catch (err) {

@@ -68,7 +68,7 @@ export async function GET(
       }
 
       const [startStr, endStr] = range.substring(bytesPrefix.length).split('-');
-      let start = Number(startStr);
+      const start = Number(startStr);
       let end = endStr ? Number(endStr) : fileSize - 1;
 
       if (Number.isNaN(start) || start < 0 || start >= fileSize) {

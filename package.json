@@ -14,7 +14,8 @@
   "dependencies": {
     "argon2": "^0.44.0",
     "cookie": "^1.1.1",
-    "next": "16.0.3",
+    "mime": "^4.1.0",
+    "next": "^16.0.8",
     "nodemailer": "^7.0.11",
     "react": "19.2.0",
     "react-dom": "19.2.0",
@@ -24,6 +25,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "baseline-browser-mapping": "^2.9.0",
     "electron": "^39.2.4",
     "electron-builder": "^25.1.8",
     "eslint": "^9",
@@ -33,7 +35,10 @@
   "build": {
     "appId": "com.onestarstream.app",
     "mac": {
-      "target": ["dmg", "pkg"],
+      "target": [
+        "dmg",
+        "pkg"
+      ],
       "category": "public.app-category.music"
     },
     "files": [
@@ -42,4 +47,3 @@
     ]
   }
 }
-

@@ -1,0 +1,162 @@
+// ===========================================================
+// PRODUCTION MAIN PROCESS FOR ONESTARSTREAM
+// Chunked local-only media writing, hardened I/O,
+// no renderer memory load, minimal logging.
+// ===========================================================
+
+const { app, BrowserWindow, ipcMain } = require('electron');
+const path = require('path');
+const fs = require('fs');
+
+const APP_ROOT = app.getAppPath();
+const MEDIA_ROOT = path.join(app.getPath('userData'), 'media');
+const PUBLIC_DIR = path.join(MEDIA_ROOT, 'public');
+
+function ensureDirectories() {
+  try {
+    fs.mkdirSync(MEDIA_ROOT, { recursive: true });
+    fs.mkdirSync(PUBLIC_DIR, { recursive: true });
+  } catch {}
+}
+
+let win;
+
+function createWindow() {
+  win = new BrowserWindow({
+    width: 1200,
+    height: 900,
+    backgroundColor: '#000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: false,                  // you already run this internal-only
+      allowRunningInsecureContent: true,   // only for local dev
+    },
+  });
+
+  win.loadURL(process.env.ONESTAR_APP_URL || 'http://localhost:3000');
+}
+
+// ===========================================================
+// ELECTRON READY
+// ===========================================================
+app.whenReady().then(() => {
+  ensureDirectories();
+  createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
+// ===========================================================
+// IPC: CHUNKED MEDIA SAVE
+// ===========================================================
+// Renderer sends metadata first
+ipcMain.handle('saveMedia:start', async (_, payload) => {
+  const { fileName } = payload;
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const targetPath = path.join(PUBLIC_DIR, safeName);
+
+  const stream = fs.createWriteStream(targetPath, { flags: 'w' });
+  return { ok: true, path: targetPath };
+});
+
+let writeStreams = new Map();
+
+// Begin chunk session
+ipcMain.handle('saveMedia:openStream', (_, fileId, targetPath) => {
+  try {
+    const ws = fs.createWriteStream(targetPath, { flags: 'w' });
+    writeStreams.set(fileId, ws);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+});
+
+// Write chunk
+ipcMain.handle('saveMedia:writeChunk', (_, fileId, buf) => {
+  const ws = writeStreams.get(fileId);
+  if (!ws) return { ok: false };
+
+  ws.write(Buffer.from(buf));
+  return { ok: true };
+});
+
+// Finalize file
+ipcMain.handle('saveMedia:finish', (_, fileId) => {
+  const ws = writeStreams.get(fileId);
+  if (!ws) return { ok: false };
+
+  ws.end();
+  writeStreams.delete(fileId);
+  return { ok: true };
+});
+
+// Abort
+ipcMain.handle('saveMedia:abort', (_, fileId) => {
+  const ws = writeStreams.get(fileId);
+  if (!ws) return { ok: false };
+
+  try {
+    ws.close();
+  } catch {}
+  writeStreams.delete(fileId);
+  return { ok: true };
+});
+
+// ===========================================================
+// LIST MEDIA
+// ===========================================================
+ipcMain.handle('media:list', () => {
+  try {
+    const files = fs.readdirSync(PUBLIC_DIR);
+    return files.map((f) => {
+      const full = path.join(PUBLIC_DIR, f);
+      const stat = fs.statSync(full);
+      return {
+        id: f,
+        fileName: f,
+        title: f,
+        sizeBytes: stat.size,
+        type: guessType(f),
+        createdAt: stat.birthtime.toISOString(),
+        protected: false,
+      };
+    });
+  } catch {
+    return [];
+  }
+});
+
+// ===========================================================
+// GET FILE CONTENT (streamed to renderer)
+// ===========================================================
+ipcMain.handle('media:get', async (_, fileName) => {
+  const safe = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const full = path.join(PUBLIC_DIR, safe);
+
+  if (!fs.existsSync(full)) return { ok: false };
+
+  const data = fs.readFileSync(full);
+  return { ok: true, blob: data, name: fileName };
+});
+
+// ===========================================================
+// HELPERS
+// ===========================================================
+function guessType(name) {
+  const ext = name.toLowerCase();
+  if (ext.match(/\.(wav|aif|aiff|mp3|m4a|flac)$/)) return 'audio';
+  if (ext.match(/\.(mp4|mov|mkv|webm)$/)) return 'video';
+  if (ext.match(/\.(jpg|jpeg|png|gif|webp)$/)) return 'image';
+  return 'audio';
+}
+

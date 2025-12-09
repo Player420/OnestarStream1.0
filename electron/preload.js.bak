@@ -1,0 +1,52 @@
+// ===========================================================
+// PRELOAD — EXPOSES BRIDGE SAFELY TO NEXT.JS
+// Minimal logging, max performance, chunk-safe.
+// ===========================================================
+
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('onestar', {
+  listMedia: async () => {
+    const r = await ipcRenderer.invoke('media:list');
+    return r || [];
+  },
+
+  getShareFile: async (id) => {
+    const r = await ipcRenderer.invoke('media:get', id);
+    if (!r?.ok) throw new Error('Cannot read file.');
+    return { blob: new Blob([r.blob]), name: r.name };
+  },
+
+  saveMedia: async ({ file, title, type, downloadable }) => {
+    const fileId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const fileName = file.name || `${fileId}.bin`;
+
+    const start = await ipcRenderer.invoke('saveMedia:start', { fileName });
+    if (!start?.ok) return { ok: false };
+
+    const open = await ipcRenderer.invoke('saveMedia:openStream', fileId, start.path);
+    if (!open?.ok) return { ok: false };
+
+    const CHUNK = 1024 * 1024; // 1 MB
+    const buf = Buffer.from(await file.arrayBuffer());
+    let offset = 0;
+
+    while (offset < buf.length) {
+      const part = buf.subarray(offset, offset + CHUNK);
+      const r = await ipcRenderer.invoke('saveMedia:writeChunk', fileId, part);
+
+      if (!r?.ok) {
+        await ipcRenderer.invoke('saveMedia:abort', fileId);
+        return { ok: false };
+      }
+
+      offset += CHUNK;
+    }
+
+    const fin = await ipcRenderer.invoke('saveMedia:finish', fileId);
+    if (!fin?.ok) return { ok: false };
+
+    return { ok: true, id: fileId, fileName };
+  }
+});
+

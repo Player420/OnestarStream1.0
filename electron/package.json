@@ -1,11 +1,16 @@
 {
   "name": "onestarstream-electron",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "dist/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build": "tsc -p ."
   },
   "devDependencies": {
-    "electron": "^30.0.0"
+    "electron": "^30.0.0",
+    "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "mime": "^3.0.0"
   }
 }
