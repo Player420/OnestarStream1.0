@@ -76,6 +76,10 @@ export async function acceptSharedPackage(
   // 5. Decide whether to keep this as protected vs downloadable in local library.
   const protectedFlag = !options.downloadable;
 
+  // Generate a unique license ID for the accepted share
+  const { randomUUID } = await import('crypto');
+  const licenseId = `license-${randomUUID()}`;
+
   // 6. Register in local library.
   //    This uses your existing mediaStore logic and writes to:
   //      - PROTECTED_MEDIA_DIR when protectedFlag === true
@@ -87,6 +91,7 @@ export async function acceptSharedPackage(
     originalName: meta.fileName,
     contents: decrypted,
     protected: protectedFlag,
+    licenseId,
   });
 
   return newItem;

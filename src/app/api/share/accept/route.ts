@@ -52,6 +52,10 @@ export async function POST(req: NextRequest) {
   const sourcePath = getMediaFilePath(media);
   const contents = await fs.readFile(sourcePath);
 
+  // Generate a unique license ID for the accepted share
+  const { randomUUID } = await import('crypto');
+  const licenseId = `license-${randomUUID()}`;
+
   // For now, we keep the same title + type.
   // "downloadable" flag controls protected vs play-only for the *new* item.
   const newItem = await addMedia({
@@ -61,6 +65,7 @@ export async function POST(req: NextRequest) {
     originalName: media.fileName,
     contents,
     protected: !share.downloadable,
+    licenseId,
   });
 
   await markShareAccepted(shareId);

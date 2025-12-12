@@ -12,7 +12,8 @@ export interface MediaItem {
   sizeBytes: number;
   createdAt: string;
   protected: boolean;
-  ownerId: string | null; // NEW: owner of this media (user.id)
+  ownerId: string | null;
+  licenseId: string; // Required: every media item must have a license
 }
 
 const MEDIA_DIR = path.join(process.cwd(), 'public', 'media');
@@ -35,7 +36,7 @@ export async function getAllMedia(): Promise<MediaItem[]> {
   const raw = await fs.readFile(META_PATH, 'utf8');
   const items = JSON.parse(raw) as any[];
 
-  // Normalize legacy rows
+  // Normalize legacy rows and auto-generate licenses for old entries
   return items.map((item) => ({
     id: item.id,
     title: item.title ?? '',
@@ -45,11 +46,30 @@ export async function getAllMedia(): Promise<MediaItem[]> {
     createdAt: item.createdAt ?? new Date().toISOString(),
     protected: item.protected ?? false,
     ownerId: item.ownerId ?? null,
+    licenseId: item.licenseId ?? `license-${item.id}`, // Auto-generate for legacy entries
   }));
 }
 
 async function saveAllMedia(items: MediaItem[]) {
   await fs.writeFile(META_PATH, JSON.stringify(items, null, 2), 'utf8');
+}
+
+/**
+ * Compute deterministic license ID for media.
+ * Uses SHA-256(mediaHash + ownerId) for deterministic generation.
+ * Falls back to random UUID if ownerId is not available.
+ */
+export function computeMediaLicenseId(mediaHash: string, ownerId: string | null): string {
+  if (!ownerId) {
+    // Fallback to random UUID for public/unowned media
+    return `license-${randomUUID()}`;
+  }
+  
+  return crypto
+    .createHash('sha256')
+    .update(mediaHash)
+    .update(ownerId)
+    .digest('hex');
 }
 
 interface AddMediaInput {
@@ -59,7 +79,8 @@ interface AddMediaInput {
   originalName: string;
   contents: Buffer;
   protected?: boolean;
-  ownerId?: string | null; // NEW: who owns this copy
+  ownerId?: string | null;
+  licenseId?: string; // Optional: will be auto-generated if not provided
 }
 
 /**
@@ -105,6 +126,15 @@ export async function addMedia(input: AddMediaInput): Promise<MediaItem> {
   const fileName = `${id}${ext}`;
   const isProtected = !!input.protected;
   const ownerId = input.ownerId ?? null;
+  
+  // Compute media hash (SHA-256 of plaintext)
+  const mediaHash = crypto
+    .createHash('sha256')
+    .update(input.contents)
+    .digest('hex');
+  
+  // Generate deterministic licenseId if not provided
+  const licenseId = input.licenseId ?? computeMediaLicenseId(mediaHash, ownerId);
 
   let newItem: MediaItem;
 
@@ -125,6 +155,7 @@ export async function addMedia(input: AddMediaInput): Promise<MediaItem> {
       createdAt: new Date().toISOString(),
       protected: true,
       ownerId,
+      licenseId,
     };
   } else {
     // Non-protected: store plain in public/media
@@ -140,6 +171,7 @@ export async function addMedia(input: AddMediaInput): Promise<MediaItem> {
       createdAt: new Date().toISOString(),
       protected: false,
       ownerId,
+      licenseId,
     };
   }
 

@@ -89,20 +89,20 @@ export default function UploadPage() {
 
         // FIXED ARGUMENT SHAPE — DO NOT SEND File OBJECT
         const start = await w.onestar.startChunkedSave({
-          originalName: file.name,       // REQUIRED by main.ts
+          originalName: file.name, // REQUIRED by main.ts
           title,
           type,
-          downloadable
+          downloadable,
         });
 
-        if (!start?.ok || !start.sessionId) {
+        if (!start?.ok || !start.data?.sessionId) {
           stopFake();
           setStatus('Upload failed (start)');
           setUploading(false);
           return;
         }
 
-        const sessionId = start.sessionId;
+        const sessionId = start.data.sessionId;
 
         // Chunking loop
         const chunkSize = 1024 * 1024 * 2; // 2MB
@@ -113,7 +113,7 @@ export default function UploadPage() {
           const chunk = new Uint8Array(await slice.arrayBuffer());
 
           const res = await w.onestar.appendChunk({ sessionId, chunk });
-          if (!res.ok) {
+          if (!res?.ok) {
             stopFake();
             setStatus('Upload failed (append)');
             setUploading(false);

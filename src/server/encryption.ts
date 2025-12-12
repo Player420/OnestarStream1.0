@@ -4,7 +4,7 @@ import path from 'path';
 
 // AES-256-GCM parameters
 const ALGO = 'aes-256-gcm';
-const PBKDF2_ITER = 100_000;
+const PBKDF2_ITER = 600_000; // OWASP 2023 recommendation
 const KEY_LEN = 32;
 const SALT_LEN = 16;
 

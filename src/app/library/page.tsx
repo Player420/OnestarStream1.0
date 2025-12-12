@@ -15,20 +15,7 @@ interface MediaItem {
   protected: boolean;
 }
 
-/***************************************************************************************************
- * GLOBAL TYPE FIX — ensure TypeScript knows preload APIs exist
- **************************************************************************************************/
-declare global {
-  interface Window {
-    onestar?: {
-      listMedia: () => Promise<MediaItem[]>;
-      deleteMedia: (id: string) => Promise<{ ok: boolean }>;
-      getShareFile: (id: string) => Promise<any>;
-      getFileBytes: (absPath: string) => Promise<Uint8Array>;
-      getFilePath: (id: string) => Promise<{ ok: boolean; path: string }>;
-    };
-  }
-}
+/* Using authoritative types from `src/types/onestar.d.ts` */
 
 /***************************************************************************************************
  * PAGE IMPLEMENTATION — NO PLAYBACK, NO UI MODIFICATIONS
@@ -71,9 +58,10 @@ export default function LibraryPage() {
           return;
         }
 
-        const list = await window.onestar.listMedia();
-        if (Array.isArray(list)) {
-          list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        const resp = await window.onestar.listMedia();
+        if (resp?.ok && Array.isArray(resp.data)) {
+          const list = resp.data;
+          list.sort((a: any, b: any) => b.createdAt.localeCompare(a.createdAt));
           setItems(list);
         } else {
           setItems([]);

@@ -134,35 +134,85 @@ function registerProtocol() {
 /***************************************************************************************************
  * LIST + DELETE IPC
  **************************************************************************************************/
-ipcMain.handle("onestar:listMedia", () => loadIndex());
+ipcMain.handle("onestar:listMedia", () => {
+  try {
+    const items = loadIndex();
+    return { ok: true, data: items };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+});
 
 ipcMain.handle("onestar:deleteMedia", (_, { id }) => {
-  const items = loadIndex();
-  const idx = items.findIndex((x) => x.id === id);
-  if (idx < 0) return { ok: false };
-
-  const item = items[idx];
-  items.splice(idx, 1);
-  saveIndex(items);
-
-  const base = item.protected ? dirs.protectedDir : dirs.publicDir;
   try {
-    fs.unlinkSync(path.join(base, item.fileName));
-  } catch {}
+    const items = loadIndex();
+    const idx = items.findIndex((x) => x.id === id);
+    if (idx < 0) return { ok: false, error: "not_found" };
 
-  return { ok: true };
+    const item = items[idx];
+    items.splice(idx, 1);
+    saveIndex(items);
+
+    const base = item.protected ? dirs.protectedDir : dirs.publicDir;
+    try {
+      fs.unlinkSync(path.join(base, item.fileName));
+    } catch {}
+
+    return { ok: true, data: true };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 });
 
 /***************************************************************************************************
  * FILE PATH
  **************************************************************************************************/
 ipcMain.handle("onestar:getFilePath", (_, { id }) => {
-  const items = loadIndex();
-  const item = items.find((i) => i.id === id);
-  if (!item) return { ok: false };
+  try {
+    const items = loadIndex();
+    const item = items.find((i) => i.id === id);
+    if (!item) return { ok: false, error: "not_found" };
 
-  const base = item.protected ? dirs.protectedDir : dirs.publicDir;
-  return { ok: true, absPath: path.join(base, item.fileName) };
+    const base = item.protected ? dirs.protectedDir : dirs.publicDir;
+    return { ok: true, data: { absPath: path.join(base, item.fileName) } };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+});
+
+/***************************************************************************************************
+ * SHARE FILE / READ BYTES
+ **************************************************************************************************/
+ipcMain.handle("onestar:getShareFile", (_, { id }) => {
+  try {
+    const items = loadIndex();
+    const item = items.find((i) => i.id === id);
+    if (!item) return { ok: false, error: "not_found" };
+
+    const base = item.protected ? dirs.protectedDir : dirs.publicDir;
+    const absPath = path.join(base, item.fileName);
+    const mimeType = mime.getType(absPath) || "application/octet-stream";
+
+    return {
+      ok: true,
+      data: {
+        filePath: absPath,
+        fileName: item.fileName,
+        mimeType,
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+});
+
+ipcMain.handle("onestar:getFileBytes", async (_, { absPath }) => {
+  try {
+    const data = await fs.promises.readFile(absPath);
+    return { ok: true, data: Uint8Array.from(data) };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 });
 
 /***************************************************************************************************
@@ -171,61 +221,73 @@ ipcMain.handle("onestar:getFilePath", (_, { id }) => {
 const active = new Map();
 
 ipcMain.handle("onestar:startSave", (_, opts) => {
-  const sessionId = crypto.randomUUID();
-  const ext = path.extname(opts.originalName);
-  const finalName = `${sessionId}${ext}`;
+  try {
+    const sessionId = crypto.randomUUID();
+    const ext = path.extname(opts.originalName);
+    const finalName = `${sessionId}${ext}`;
 
-  const temp = path.join(dirs.root, "tmp");
-  if (!fs.existsSync(temp)) fs.mkdirSync(temp);
+    const temp = path.join(dirs.root, "tmp");
+    if (!fs.existsSync(temp)) fs.mkdirSync(temp);
 
-  const tempPath = path.join(temp, `${sessionId}.part`);
-  fs.writeFileSync(tempPath, Buffer.alloc(0));
+    const tempPath = path.join(temp, `${sessionId}.part`);
+    fs.writeFileSync(tempPath, Buffer.alloc(0));
 
-  active.set(sessionId, {
-    tempPath,
-    finalName,
-    title: opts.title,
-    type: opts.type,
-    protected: !opts.downloadable,
-    sizeBytes: 0,
-    createdAt: new Date().toISOString(),
-  });
+    active.set(sessionId, {
+      tempPath,
+      finalName,
+      title: opts.title,
+      type: opts.type,
+      protected: !opts.downloadable,
+      sizeBytes: 0,
+      createdAt: new Date().toISOString(),
+    });
 
-  return { ok: true, sessionId };
+    return { ok: true, data: { sessionId } };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 });
 
 ipcMain.handle("onestar:appendSave", (_, { sessionId, chunk }) => {
-  const s = active.get(sessionId);
-  if (!s) return { ok: false };
+  try {
+    const s = active.get(sessionId);
+    if (!s) return { ok: false, error: "not_found" };
 
-  fs.appendFileSync(s.tempPath, chunk);
-  s.sizeBytes += chunk.length;
-  return { ok: true };
+    fs.appendFileSync(s.tempPath, chunk);
+    s.sizeBytes += chunk.length;
+    return { ok: true, data: true };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 });
 
 ipcMain.handle("onestar:finishSave", (_, { sessionId }) => {
-  const s = active.get(sessionId);
-  if (!s) return { ok: false };
+  try {
+    const s = active.get(sessionId);
+    if (!s) return { ok: false, error: "not_found" };
 
-  const targetDir = s.protected ? dirs.protectedDir : dirs.publicDir;
-  const finalPath = path.join(targetDir, s.finalName);
+    const targetDir = s.protected ? dirs.protectedDir : dirs.publicDir;
+    const finalPath = path.join(targetDir, s.finalName);
 
-  fs.renameSync(s.tempPath, finalPath);
+    fs.renameSync(s.tempPath, finalPath);
 
-  const items = loadIndex();
-  items.push({
-    id: sessionId,
-    title: s.title,
-    fileName: s.finalName,
-    type: s.type,
-    sizeBytes: s.sizeBytes,
-    createdAt: s.createdAt,
-    protected: s.protected,
-  });
-  saveIndex(items);
+    const items = loadIndex();
+    items.push({
+      id: sessionId,
+      title: s.title,
+      fileName: s.finalName,
+      type: s.type,
+      sizeBytes: s.sizeBytes,
+      createdAt: s.createdAt,
+      protected: s.protected,
+    });
+    saveIndex(items);
 
-  active.delete(sessionId);
-  return { ok: true };
+    active.delete(sessionId);
+    return { ok: true, data: true };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 });
 
 /***************************************************************************************************
@@ -233,8 +295,9 @@ ipcMain.handle("onestar:finishSave", (_, { sessionId }) => {
  **************************************************************************************************/
 const audioCtx = new (globalThis.AudioContext || require("web-audio-api").AudioContext)();
 
-let state = {
-  buffer: null as AudioBuffer | null,
+// Narrow WebAudio typings to runtime-any to avoid needing DOM lib in Electron main
+let state: any = {
+  buffer: null,
   duration: 0,
   currentTime: 0,
   lastSeek: 0,
@@ -242,7 +305,7 @@ let state = {
   isPlaying: false,
 };
 
-let node: AudioBufferSourceNode | null = null;
+let node: any = null;
 
 function stop() {
   if (node) {
@@ -268,72 +331,89 @@ ipcMain.handle("onestar:loadMedia", async (_, { absPath }) => {
     state.lastSeek = 0;
     state.isPlaying = false;
 
-    return { ok: true, duration: decoded.duration };
+    return { ok: true, data: { duration: decoded.duration } };
   } catch (err) {
     return { ok: false, error: String(err) };
   }
 });
 
 ipcMain.handle("onestar:playHD", () => {
-  if (!state.buffer) return { ok: false };
+  try {
+    if (!state.buffer) return { ok: false, error: "no_buffer" };
 
-  stop();
-
-  node = audioCtx.createBufferSource();
-  node.buffer = state.buffer;
-  node.connect(audioCtx.destination);
-  node.start(0, state.lastSeek);
-
-  state.lastStart = audioCtx.currentTime;
-  state.isPlaying = true;
-
-  return { ok: true };
-});
-
-ipcMain.handle("onestar:pauseHD", () => {
-  if (!state.buffer) return { ok: false };
-
-  if (state.isPlaying) {
-    state.lastSeek += audioCtx.currentTime - state.lastStart;
-  }
-
-  stop();
-  return { ok: true };
-});
-
-ipcMain.handle("onestar:seekHD", (_, { seconds }) => {
-  if (!state.buffer) return { ok: false };
-
-  state.lastSeek = Math.max(0, Math.min(seconds, state.duration));
-
-  if (state.isPlaying) {
     stop();
+
     node = audioCtx.createBufferSource();
     node.buffer = state.buffer;
     node.connect(audioCtx.destination);
     node.start(0, state.lastSeek);
-    state.lastStart = audioCtx.currentTime;
-  }
 
-  return { ok: true };
+    state.lastStart = audioCtx.currentTime;
+    state.isPlaying = true;
+
+    return { ok: true, data: true };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+});
+
+ipcMain.handle("onestar:pauseHD", () => {
+  try {
+    if (!state.buffer) return { ok: false, error: "no_buffer" };
+
+    if (state.isPlaying) {
+      state.lastSeek += audioCtx.currentTime - state.lastStart;
+    }
+
+    stop();
+    return { ok: true, data: true };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+});
+
+ipcMain.handle("onestar:seekHD", (_, { seconds }) => {
+  try {
+    if (!state.buffer) return { ok: false, error: "no_buffer" };
+
+    state.lastSeek = Math.max(0, Math.min(seconds, state.duration));
+
+    if (state.isPlaying) {
+      stop();
+      node = audioCtx.createBufferSource();
+      node.buffer = state.buffer;
+      node.connect(audioCtx.destination);
+      node.start(0, state.lastSeek);
+      state.lastStart = audioCtx.currentTime;
+    }
+
+    return { ok: true, data: true };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 });
 
 ipcMain.handle("onestar:getAudioTime", () => {
-  if (state.isPlaying) {
-    state.currentTime =
-      state.lastSeek + (audioCtx.currentTime - state.lastStart);
+  try {
+    if (state.isPlaying) {
+      state.currentTime = state.lastSeek + (audioCtx.currentTime - state.lastStart);
 
-    if (state.currentTime >= state.duration) {
-      state.currentTime = state.duration;
-      stop();
+      if (state.currentTime >= state.duration) {
+        state.currentTime = state.duration;
+        stop();
+      }
     }
-  }
 
-  return {
-    ok: true,
-    currentTime: state.currentTime,
-    duration: state.duration,
-  };
+    return {
+      ok: true,
+      data: {
+        currentTime: state.currentTime,
+        duration: state.duration,
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 });
 
 /***************************************************************************************************

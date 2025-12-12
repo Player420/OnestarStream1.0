@@ -1,4 +1,4 @@
-// src/types/onestar.d.ts
+// Authoritative onestar preload/IPC types
 
 type MediaType = 'audio' | 'video' | 'image';
 
@@ -12,42 +12,40 @@ interface MediaItem {
   protected: boolean;
 }
 
+type IPCSuccess<T> = { ok: true; data: T };
+type IPCError = { ok: false; error: string };
+type IPCResult<T> = IPCSuccess<T> | IPCError;
+
 declare global {
   interface Window {
     onestar?: {
+      // Audio API
+      loadMedia: (absPath: string) => Promise<IPCResult<{ duration: number }>>;
+      playHD: () => Promise<IPCResult<boolean>>;
+      pauseHD: () => Promise<IPCResult<boolean>>;
+      seekHD: (seconds: number) => Promise<IPCResult<boolean>>;
+      getAudioTime: () => Promise<IPCResult<{ currentTime: number; duration: number }>>;
+
+      // Chunked save
       startChunkedSave: (opts: {
         originalName: string;
-        title: string;
-        type: MediaType;
-        downloadable: boolean;
-      }) => Promise<{ ok: boolean; sessionId?: string; error?: string }>;
+        title?: string;
+        type?: MediaType;
+        downloadable?: boolean;
+      }) => Promise<IPCResult<{ sessionId: string }>>;
 
-      appendChunk: (opts: {
-        sessionId: string;
-        chunk: Uint8Array;
-      }) => Promise<{ ok: boolean; error?: string }>;
+      appendChunk: (opts: { sessionId: string; chunk: Uint8Array }) => Promise<IPCResult<boolean>>;
 
-      finishChunkedSave: (opts: {
-        sessionId: string;
-      }) => Promise<{
-        ok: boolean;
-        id?: string;
-        fileName?: string;
-        error?: string;
-      }>;
+      finishChunkedSave: (opts: { sessionId: string }) => Promise<IPCResult<boolean>>;
 
-      listMedia: () => Promise<MediaItem[]>;
+      // Media management
+      listMedia: () => Promise<IPCResult<MediaItem[]>>;
+      deleteMedia: (id: string) => Promise<IPCResult<boolean>>;
 
-      deleteMedia: (id: string) => Promise<{ ok: boolean }>;
-
-      getShareFile: (id: string) => Promise<{
-        filePath: string;
-        fileName: string;
-        mimeType: string;
-        blob?: Blob;
-      }>;
-
-      readFileBytes: (filePath: string) => Promise<Uint8Array>;
+      // Helpers
+      getFilePath: (id: string) => Promise<IPCResult<{ absPath: string }>>;
+      getShareFile: (id: string) => Promise<IPCResult<{ filePath: string; fileName: string; mimeType: string }>>;
+      getFileBytes: (absPath: string) => Promise<IPCResult<Uint8Array>>;
     };
   }
 }

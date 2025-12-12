@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUserFromRequest } from '@/lib/authSession';
 import { addMedia, getMediaForOwner, type MediaType } from '@/lib/mediaStore';
+import { randomUUID } from 'crypto';
 
 export async function GET(req: NextRequest) {
   try {
@@ -46,6 +47,9 @@ export async function POST(req: NextRequest) {
 
     const buf = Buffer.from(await file.arrayBuffer());
 
+    // Generate a unique license ID for this media
+    const licenseId = `license-${randomUUID()}`;
+
     const item = await addMedia({
       title: title || file.name,
       type,
@@ -54,6 +58,7 @@ export async function POST(req: NextRequest) {
       contents: buf,
       protected: protectedFlag,
       ownerId: user.id, // critical: media belongs to this user
+      licenseId, // NEW: attach license ID for usage tracking
     });
 
     console.log('[POST /api/media] uploaded media', {
@@ -61,6 +66,7 @@ export async function POST(req: NextRequest) {
       title: item.title,
       protected: item.protected,
       ownerId: item.ownerId,
+      licenseId: item.licenseId,
     });
 
     return NextResponse.json(item, { status: 200 });

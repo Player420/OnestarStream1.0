@@ -13,10 +13,10 @@ function api() {
 /***************************************************************************************************
  * LOAD FILE INTO MAIN PROCESS
  **************************************************************************************************/
-export async function loadHD(absPath: string) {
+export async function loadMedia(absPath: string) {
   const o = api();
-  if (!o) return { ok: false };
-  return o.audio.load(absPath);
+  if (!o) return { ok: false, error: 'unavailable' };
+  return o.loadMedia(absPath);
 }
 
 /***************************************************************************************************
@@ -24,8 +24,8 @@ export async function loadHD(absPath: string) {
  **************************************************************************************************/
 export async function playHD() {
   const o = api();
-  if (!o) return { ok: false };
-  return o.audio.play();
+  if (!o) return { ok: false, error: 'unavailable' };
+  return o.playHD();
 }
 
 /***************************************************************************************************
@@ -33,8 +33,8 @@ export async function playHD() {
  **************************************************************************************************/
 export async function pauseHD() {
   const o = api();
-  if (!o) return { ok: false };
-  return o.audio.pause();
+  if (!o) return { ok: false, error: 'unavailable' };
+  return o.pauseHD();
 }
 
 /***************************************************************************************************
@@ -42,15 +42,50 @@ export async function pauseHD() {
  **************************************************************************************************/
 export async function seekHD(seconds: number) {
   const o = api();
-  if (!o) return { ok: false };
-  return o.audio.seek(seconds);
+  if (!o) return { ok: false, error: 'unavailable' };
+  return o.seekHD(seconds);
 }
 
 /***************************************************************************************************
  * GET CLOCK (RAF)
  **************************************************************************************************/
-export async function getHDAudioTime() {
+export async function getAudioTime() {
   const o = api();
-  if (!o) return { ok: false, currentTime: 0, duration: 0 };
-  return o.audio.getTime();
+  if (!o) return { ok: false, error: 'unavailable' };
+  return o.getAudioTime();
 }
+
+// Media management / chunked save wrappers
+export async function listMedia() {
+  const o = api();
+  if (!o) return { ok: false, error: 'unavailable' };
+  return o.listMedia();
+}
+
+export async function deleteMedia(id: string) {
+  const o = api();
+  if (!o) return { ok: false, error: 'unavailable' };
+  return o.deleteMedia(id);
+}
+
+export async function startChunkedSave(opts: any) {
+  const o = api();
+  if (!o) return { ok: false, error: 'unavailable' };
+  return o.startChunkedSave(opts);
+}
+
+export async function appendChunk(opts: any) {
+  const o = api();
+  if (!o) return { ok: false, error: 'unavailable' };
+  return o.appendChunk(opts);
+}
+
+export async function finishChunkedSave(opts: any) {
+  const o = api();
+  if (!o) return { ok: false, error: 'unavailable' };
+  return o.finishChunkedSave(opts);
+}
+
+// Backwards compatible aliases for existing UI that imports old names
+export { loadMedia as loadHD };
+export { getAudioTime as getHDAudioTime };

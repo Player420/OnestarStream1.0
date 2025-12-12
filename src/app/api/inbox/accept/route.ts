@@ -52,9 +52,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Copy the file into recipient’s library (protected or not)
+    // Copy the file into recipient's library (protected or not)
     const filePath = getMediaFilePath(media);
     const fileContents = await (await import('fs/promises')).readFile(filePath);
+
+    // Generate a unique license ID for the accepted share
+    const { randomUUID } = await import('crypto');
+    const licenseId = `license-${randomUUID()}`;
 
     await addMedia({
       title: media.title,
@@ -62,8 +66,9 @@ export async function POST(req: NextRequest) {
       sizeBytes: media.sizeBytes,
       originalName: media.fileName,
       contents: fileContents,
-      protected: !share.downloadable   // true => protected media folder
-    , ownerId: user.id
+      protected: !share.downloadable,   // true => protected media folder
+      ownerId: user.id,
+      licenseId,
     });
 
     // Mark accepted

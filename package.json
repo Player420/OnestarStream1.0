@@ -12,8 +12,11 @@
     "dist": "electron-builder --mac"
   },
   "dependencies": {
+    "@noble/curves": "^2.0.1",
+    "@onestar/db": "file:../onestardb2",
     "argon2": "^0.44.0",
     "cookie": "^1.1.1",
+    "crystals-kyber-js": "^2.5.0",
     "mime": "^4.1.0",
     "next": "^16.0.8",
     "nodemailer": "^7.0.11",

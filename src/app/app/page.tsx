@@ -8,6 +8,7 @@ import {
   getHDAudioTime,
   loadHD,
 } from "@/lib/hdAudioEngine";
+import { attachPlayerUsageTracking } from "@/lib/onestardb";
 
 import { CurrentUserBadge } from "@/components/CurrentUserBadge";
 import { redirect } from "next/navigation";
@@ -20,6 +21,8 @@ export interface MediaItem {
   sizeBytes: number;
   createdAt: string;
   protected: boolean;
+  ownerId?: string;
+  licenseId: string; // Required: every media item has a license
 }
 
 /***************************************************************************************************
@@ -35,24 +38,62 @@ function attachElement(el: HTMLAudioElement) {
 /***************************************************************************************************
  * MEDIA PLAYER
  **************************************************************************************************/
-function MediaPlayer({ item }: { item: MediaItem }) {
+function MediaPlayer({
+  item,
+  currentUser,
+}: {
+  item: MediaItem;
+  currentUser: { id: string } | null;
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [encryptedBlobUrl, setEncryptedBlobUrl] = useState<string | null>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
 
   const visibility = item.protected ? "protected" : "public";
   const encoded = encodeURIComponent(item.fileName);
   const src = `onestar://media/${visibility}/${encoded}`;
 
   /***************************************************************************************************
-   * Load main-process HD buffer
+   * Load encrypted media (PQ-Hybrid decryption in preload)
+   **************************************************************************************************/
+  const loadEncryptedMedia = async () => {
+    const w = window as any;
+    if (!w.onestar?.unwrapAndDecryptMedia) {
+      console.warn('[MediaPlayer] unwrapAndDecryptMedia not available');
+      return;
+    }
+
+    try {
+      console.log('[MediaPlayer] Loading encrypted media:', item.id);
+      const result = await w.onestar.unwrapAndDecryptMedia(item.id);
+      
+      console.log('[MediaPlayer] Decryption successful:', {
+        mimeType: result.mimeType,
+        title: result.title,
+      });
+
+      // Set Blob URL for playback
+      setEncryptedBlobUrl(result.blobUrl);
+      
+      // Store cleanup function
+      cleanupRef.current = result.cleanup;
+    } catch (error) {
+      console.error('[MediaPlayer] Failed to decrypt media:', error);
+      alert(`Decryption failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  /***************************************************************************************************
+   * Load main-process HD buffer (legacy path for unencrypted media)
    **************************************************************************************************/
   const doLoadHD = async () => {
     const w = window as any;
     if (!w.onestar?.getFilePath) return;
 
     const fp = await w.onestar.getFilePath(item.id);
-    if (!fp?.ok) return;
+    if (!fp?.ok || !fp.data?.absPath) return;
 
-    await loadHD(fp.absPath);
+    await loadHD(fp.data.absPath);
   };
 
   /***************************************************************************************************
@@ -63,22 +104,66 @@ function MediaPlayer({ item }: { item: MediaItem }) {
     if (!el) return;
 
     attachElement(el);
-    void doLoadHD();
+    
+    // Try encrypted playback first (if media is encrypted)
+    // Fall back to legacy HD buffer loading if not
+    const initPlayback = async () => {
+      // Check if this is encrypted media (has licenseId in database)
+      if (item.licenseId && item.protected) {
+        await loadEncryptedMedia();
+      } else {
+        await doLoadHD();
+      }
+    };
+    
+    void initPlayback();
+
+    // Attach usage tracking (licenseId is now always present)
+    let cleanupTracking: (() => void) | null = null;
+
+    if (item.id && currentUser) {
+      try {
+        const { detach } = attachPlayerUsageTracking(el, {
+          attachmentId: item.id,
+          licenseId: item.licenseId, // Required field - always present
+          principal: currentUser.id, // currentUser is guaranteed non-null here
+          onQuotaExceeded: () => {
+            alert("Usage quota exceeded. Playback stopped.");
+          },
+        });
+
+        cleanupTracking = detach;
+      } catch (err) {
+        console.error("[MediaPlayer] attachPlayerUsageTracking failed:", err);
+      }
+    }
 
     let raf: number;
 
     const tick = async () => {
       const res = await getHDAudioTime();
-      if (res?.currentTime != null) el.currentTime = res.currentTime;
+      if (res?.ok && res.data?.currentTime != null) el.currentTime = res.data.currentTime;
       raf = requestAnimationFrame(tick);
     };
 
     raf = requestAnimationFrame(tick);
     return () => {
       cancelAnimationFrame(raf);
-      stopHD();
+      if (cleanupTracking) cleanupTracking();
+      pauseHD();
+      
+      // SECURITY: Cleanup encrypted Blob URL
+      if (cleanupRef.current) {
+        console.log('[MediaPlayer] Cleaning up encrypted media');
+        cleanupRef.current();
+        cleanupRef.current = null;
+      }
+      if (encryptedBlobUrl) {
+        URL.revokeObjectURL(encryptedBlobUrl);
+        setEncryptedBlobUrl(null);
+      }
     };
-  }, []);
+  }, [item.id, currentUser?.id, encryptedBlobUrl]);
 
   const handleLoadedMetadata = () => {
     const el = audioRef.current;
@@ -91,6 +176,9 @@ function MediaPlayer({ item }: { item: MediaItem }) {
     }
   };
 
+  // Use encrypted Blob URL if available, otherwise use onestar:// protocol
+  const audioSrc = encryptedBlobUrl || src;
+
   return (
     <div style={{ width: "100%", marginBottom: 20 }}>
       <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
@@ -99,7 +187,7 @@ function MediaPlayer({ item }: { item: MediaItem }) {
 
       <audio
         ref={audioRef}
-        src={src}
+        src={audioSrc}
         controls
         preload="metadata"
         controlsList="nodownload noplaybackrate"
@@ -115,7 +203,8 @@ function MediaPlayer({ item }: { item: MediaItem }) {
           const a = e.currentTarget;
           console.error("[MediaPlayer ERROR]", {
             err: a.error,
-            src,
+            src: audioSrc,
+            encrypted: !!encryptedBlobUrl,
             networkState: a.networkState,
             readyState: a.readyState,
           });
@@ -172,6 +261,7 @@ function HamburgerMenu({ onDelete }: { onDelete: () => void }) {
  **************************************************************************************************/
 export default function AppPage() {
   const [auth, setAuth] = useState<boolean | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ id: string } | null>(null);
   const [items, setItems] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -192,6 +282,18 @@ export default function AppPage() {
   }, []);
 
   /***************************************************************************************************
+   * FETCH CURRENT USER
+   **************************************************************************************************/
+  useEffect(() => {
+    if (auth !== true) return;
+
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => setCurrentUser(d.user || null))
+      .catch(() => setCurrentUser(null));
+  }, [auth]);
+
+  /***************************************************************************************************
    * LOAD MEDIA LIST
    **************************************************************************************************/
   useEffect(() => {
@@ -201,8 +303,9 @@ export default function AppPage() {
       try {
         const w = window as any;
         if (w.onestar?.listMedia) {
-          const list = await w.onestar.listMedia();
-          setItems(list);
+          const resp = await w.onestar.listMedia();
+          if (resp?.ok && Array.isArray(resp.data)) setItems(resp.data);
+          else setItems([]);
         } else {
           const resp = await fetch("/api/media");
           if (resp.ok) setItems(await resp.json());
@@ -324,7 +427,7 @@ export default function AppPage() {
                   <span>{new Date(item.createdAt).toLocaleString()}</span>
                 </p>
 
-                <MediaPlayer item={item} />
+                <MediaPlayer item={item} currentUser={currentUser} />
 
                 {!item.protected && (
                   <>
