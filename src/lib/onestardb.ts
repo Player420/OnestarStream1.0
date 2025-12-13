@@ -39,25 +39,16 @@ import type {
 // -----------------------------------------------------------------------------
 // Type augmentation for window.onestar
 // -----------------------------------------------------------------------------
+// NOTE: Types are defined in types/global.d.ts (Phase 18)
+// This declaration ensures compatibility with the global types
+// In Electron environment, these APIs are always available
 
-declare global {
-  interface Window {
-    onestar?: {
-      loadMedia: (absPath: string) => Promise<any>;
-      playHD: () => Promise<any>;
-      pauseHD: () => Promise<any>;
-      seekHD: (seconds: number) => Promise<any>;
-      getAudioTime: () => Promise<any>;
-      startChunkedSave: (opts: any) => Promise<any>;
-      appendChunk: (opts: any) => Promise<any>;
-      finishChunkedSave: (opts: any) => Promise<any>;
-      listMedia: () => Promise<any>;
-      deleteMedia: (id: string) => Promise<any>;
-      getFilePath: (id: string) => Promise<any>;
-      getShareFile: (id: string) => Promise<any>;
-      getFileBytes: (absPath: string) => Promise<{ ok: boolean; data?: Uint8Array; error?: string }>;
-    };
+// Helper to access onestar APIs (assumes Electron environment)
+function getOnestarAPI() {
+  if (!window.onestar) {
+    throw new Error('window.onestar not available - must run in Electron');
   }
+  return window.onestar;
 }
 
 // -----------------------------------------------------------------------------
@@ -177,14 +168,20 @@ export async function checkMediaAccess(
     const { mediaId, license, requester, action } = params;
 
     // Get file path from media index
+    if (!window.onestar?.getFilePath) {
+      return { authorized: false, error: "getFilePath not available" };
+    }
     const pathResult = await window.onestar.getFilePath(mediaId);
-    if (!pathResult.ok) {
+    if (!pathResult.ok || !pathResult.data) {
       return { authorized: false, error: "Media not found" };
     }
 
     const { absPath } = pathResult.data;
 
     // Read encrypted file bytes
+    if (!window.onestar?.getFileBytes) {
+      return { authorized: false, error: "getFileBytes not available" };
+    }
     const bytesResult = await window.onestar.getFileBytes(absPath);
     if (!bytesResult.ok || !bytesResult.data) {
       return { authorized: false, error: "Failed to read media file" };
@@ -439,6 +436,15 @@ export async function encryptAndStoreMedia(
     const { filePath, custodians, mediaId, uploaderRootIdentity } = params;
 
     // Read file bytes via window.onestar
+    if (!window.onestar?.getFileBytes) {
+      return { 
+        attachmentId: "", 
+        mediaHash: "",
+        licenseId: "",
+        success: false, 
+        error: "getFileBytes not available" 
+      };
+    }
     const bytesResult = await window.onestar.getFileBytes(filePath);
     if (!bytesResult.ok || !bytesResult.data) {
       return { 
@@ -552,14 +558,20 @@ export async function loadAndDecryptMedia(
     if (attachmentMetadata) {
       absPath = attachmentMetadata.filePath;
     } else {
+      if (!window.onestar?.getFilePath) {
+        return { success: false, error: "getFilePath not available" };
+      }
       const pathResult = await window.onestar.getFilePath(attachmentId);
-      if (!pathResult.ok) {
+      if (!pathResult.ok || !pathResult.data) {
         return { success: false, error: "Media not found" };
       }
       absPath = pathResult.data.absPath;
     }
 
     // Read encrypted file bytes
+    if (!window.onestar?.getFileBytes) {
+      throw new Error("getFileBytes not available");
+    }
     const bytesResult = await window.onestar.getFileBytes(absPath);
     if (!bytesResult.ok || !bytesResult.data) {
       return { success: false, error: "Failed to read encrypted media" };

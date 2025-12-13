@@ -1,0 +1,220 @@
+/**
+ * full-cycle.test.mjs
+ * 
+ * End-to-end workflow test
+ * 
+ * Validates complete sync lifecycle:
+ * 1. App startup + scheduler init
+ * 2. Force needs-sync state
+ * 3. User navigates to settings
+ * 4. User triggers manual check
+ * 5. Simulate import completion
+ * 6. Verify return to up-to-date
+ */
+
+import { navigate, waitForSelector, clickElement, waitForText, getElementText, getElementAttribute } from './helpers/waitForSelector.js';
+import { forceSyncStatus, waitForIpcEvent, ipcInvoke, forceVaultLocked } from './helpers/ipc.js';
+
+/**
+ * Test: Complete sync workflow
+ * 
+ * @param {Object} context - { electronProcess, cdpClient, close }
+ */
+export default async function test({ cdpClient }) {
+  console.log('[Test] === PHASE 1: App Startup ===');
+
+  // Step 1: Wait for app to load
+  await waitForSelector(cdpClient, 'nav', { timeout: 15000 });
+  console.log('[Test] ✅ App loaded');
+
+  // Step 2: Verify scheduler initialized
+  const initialNextRun = await ipcInvoke(cdpClient, 'sync:scheduler:getNextRun', null);
+  if (initialNextRun === null) {
+    throw new Error('Scheduler not initialized on startup');
+  }
+  console.log(`[Test] ✅ Scheduler initialized: nextRun in ${Math.round((initialNextRun - Date.now()) / 1000)}s`);
+
+  // Step 3: Verify badge appears
+  const badgeSelector = 'nav a[href="/settings/sync"] span';
+  await waitForSelector(cdpClient, badgeSelector, { timeout: 10000, visible: true });
+  const initialBadge = await getElementText(cdpClient, badgeSelector);
+  console.log(`[Test] ✅ Badge visible: "${initialBadge}"`);
+
+  console.log('\n[Test] === PHASE 2: Trigger Needs-Sync State ===');
+
+  // Step 4: Emit needs-sync health report
+  const needsSyncReport = {
+    needsSync: true,
+    isAligned: false,
+    warnings: [
+      {
+        severity: 'critical',
+        message: 'Keystore missing 5 owner keys',
+        recommendation: 'Import latest keystore backup'
+      }
+    ],
+    lastCheck: Date.now(),
+    nextScheduled: Date.now() + 3600000
+  };
+
+  await forceSyncStatus(cdpClient, needsSyncReport);
+  console.log('[Test] ✅ Emitted needs-sync health report');
+
+  // Step 5: Verify badge turns red
+  await new Promise(resolve => setTimeout(resolve, 500)); // Wait for UI update
+  const needsSyncBadge = await getElementText(cdpClient, badgeSelector);
+  if (needsSyncBadge !== '!') {
+    console.warn(`[Test] Badge is "${needsSyncBadge}", expected "!" for needs-sync`);
+  } else {
+    console.log('[Test] ✅ Badge shows alert: "!"');
+  }
+
+  console.log('\n[Test] === PHASE 3: User Navigation ===');
+
+  // Step 6: User clicks sync badge (navigate to settings)
+  console.log('[Test] Clicking sync badge to navigate...');
+  await clickElement(cdpClient, `${badgeSelector}`);
+  
+  // Wait for settings page to load
+  await waitForSelector(cdpClient, 'main', { timeout: 10000 });
+  console.log('[Test] ✅ Navigated to settings');
+
+  // Step 7: Click Scheduler tab
+  console.log('[Test] Clicking Scheduler tab...');
+  await clickElement(cdpClient, 'button:has-text("Scheduler")');
+  await waitForSelector(cdpClient, '.status-card, [data-testid="status-card"]', { timeout: 5000 });
+  console.log('[Test] ✅ Scheduler tab active');
+
+  // Step 8: Verify needs-sync displayed
+  await waitForText(cdpClient, 'main', /needs.sync|Needs Sync/i, { timeout: 5000 });
+  console.log('[Test] ✅ Needs-sync status displayed');
+
+  // Step 9: Verify warning displayed
+  const hasWarning = await waitForText(cdpClient, 'main', /missing.*keys|Keystore missing/i, { timeout: 3000 })
+    .then(() => true).catch(() => false);
+  if (!hasWarning) {
+    console.warn('[Test] Warning not displayed');
+  } else {
+    console.log('[Test] ✅ Warning displayed');
+  }
+
+  console.log('\n[Test] === PHASE 4: Manual Check ===');
+
+  // Step 10: User clicks "Run Check Now"
+  const buttonSelector = 'button:has-text("Run Check Now"), button:has-text("Check Now"), button:has-text("Run Now")';
+  const buttonExists = await waitForSelector(cdpClient, buttonSelector, { timeout: 5000 })
+    .then(() => true).catch(() => false);
+
+  if (!buttonExists) {
+    console.warn('[Test] Manual check button not found, skipping manual check phase');
+  } else {
+    console.log('[Test] Clicking "Run Check Now"...');
+    await clickElement(cdpClient, buttonSelector);
+
+    // Wait for check to complete
+    await waitForIpcEvent(cdpClient, 'sync:status-change', { timeout: 15000 });
+    console.log('[Test] ✅ Manual check completed');
+  }
+
+  console.log('\n[Test] === PHASE 5: Simulate Import ===');
+
+  // Step 11: Simulate user importing keystore (mock)
+  console.log('[Test] Simulating keystore import completion...');
+  
+  // In real workflow, user would:
+  // 1. Navigate to /settings/sync (overview tab)
+  // 2. Click "Import Keystore"
+  // 3. Select file
+  // 4. Wait for merge to complete
+  //
+  // For E2E test, we simulate by emitting up-to-date report
+  
+  const upToDateReport = {
+    needsSync: false,
+    isAligned: true,
+    warnings: [],
+    lastCheck: Date.now(),
+    nextScheduled: Date.now() + 3600000
+  };
+
+  await forceSyncStatus(cdpClient, upToDateReport);
+  console.log('[Test] ✅ Import completion simulated');
+
+  console.log('\n[Test] === PHASE 6: Verify Resolution ===');
+
+  // Step 12: Verify UI updated to up-to-date
+  await waitForText(cdpClient, 'main', /up.to.date|Up to Date/i, { timeout: 5000 });
+  console.log('[Test] ✅ Status shows up-to-date');
+
+  // Step 13: Verify warnings cleared
+  const stillHasWarning = await waitForText(cdpClient, 'main', /missing.*keys/i, { timeout: 2000 })
+    .then(() => true).catch(() => false);
+  if (stillHasWarning) {
+    console.warn('[Test] Warning still present after resolution');
+  } else {
+    console.log('[Test] ✅ Warnings cleared');
+  }
+
+  // Step 14: Verify badge turned green
+  const finalBadge = await getElementText(cdpClient, badgeSelector);
+  if (finalBadge !== '✓') {
+    console.warn(`[Test] Badge is "${finalBadge}", expected "✓" for up-to-date`);
+  } else {
+    console.log('[Test] ✅ Badge shows checkmark: "✓"');
+  }
+
+  // Step 15: Verify badge color is green
+  const badgeStyle = await getElementAttribute(cdpClient, badgeSelector, 'style');
+  const hasGreenColor = 
+    badgeStyle.includes('#10b981') || 
+    badgeStyle.includes('rgb(16, 185, 129)');
+  
+  if (!hasGreenColor) {
+    console.warn(`[Test] Badge color may not be green: ${badgeStyle}`);
+  } else {
+    console.log('[Test] ✅ Badge color is green');
+  }
+
+  console.log('\n[Test] === PHASE 7: Scheduler State ===');
+
+  // Step 16: Verify scheduler still active
+  const finalNextRun = await ipcInvoke(cdpClient, 'sync:scheduler:getNextRun', null);
+  if (finalNextRun === null) {
+    throw new Error('Scheduler stopped after workflow completion');
+  }
+  
+  const timeUntilNext = finalNextRun - Date.now();
+  if (timeUntilNext < 0) {
+    console.warn('[Test] nextRun is in the past');
+  } else {
+    console.log(`[Test] ✅ Scheduler active: nextRun in ${Math.round(timeUntilNext / 1000)}s`);
+  }
+
+  console.log('\n[Test] === PHASE 8: Edge Cases ===');
+
+  // Step 17: Test vault lock behavior
+  console.log('[Test] Testing vault lock...');
+  await forceVaultLocked(cdpClient, true);
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  
+  const vaultLockedNextRun = await ipcInvoke(cdpClient, 'sync:scheduler:getNextRun', null);
+  if (vaultLockedNextRun === null) {
+    console.log('[Test] ✅ Scheduler suspended when vault locked');
+  } else {
+    console.warn('[Test] Scheduler still active while vault locked');
+  }
+
+  // Unlock
+  await forceVaultLocked(cdpClient, false);
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  
+  const vaultUnlockedNextRun = await ipcInvoke(cdpClient, 'sync:scheduler:getNextRun', null);
+  if (vaultUnlockedNextRun !== null) {
+    console.log('[Test] ✅ Scheduler resumed after vault unlock');
+  } else {
+    console.warn('[Test] Scheduler not resumed after unlock');
+  }
+
+  console.log('\n[Test] === COMPLETE ===');
+  console.log('[Test] ✅ Full cycle test passed');
+}

@@ -1,52 +1,22 @@
 {
-  "name": "onestarstream",
+  "name": "onestarstream-monorepo",
   "version": "0.1.0",
   "private": true,
-  "main": "electron/dist/main.js",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint",
-    "dev:electron": "ONESTAR_APP_URL=http://localhost:3000 npx electron .",
-    "dist": "electron-builder --mac"
-  },
-  "dependencies": {
-    "@noble/curves": "^2.0.1",
-    "@onestar/db": "file:../onestardb2",
-    "argon2": "^0.44.0",
-    "cookie": "^1.1.1",
-    "crystals-kyber-js": "^2.5.0",
-    "mime": "^4.1.0",
-    "next": "^16.0.8",
-    "nodemailer": "^7.0.11",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
-    "ws": "^8.18.3"
+    "build": "npm run build --workspace=packages/onestar-db-sdk && npm run build --workspace=apps/desktop",
+    "build:sdk": "npm run build --workspace=packages/onestar-db-sdk",
+    "build:app": "npm run build --workspace=apps/desktop",
+    "dev": "npm run dev --workspace=apps/desktop",
+    "dev:electron": "npm run dev:electron --workspace=apps/desktop",
+    "test:e2e": "npm run test:e2e --workspace=apps/desktop",
+    "clean": "rm -rf packages/*/dist apps/desktop/.next apps/desktop/electron/dist node_modules packages/*/node_modules apps/desktop/node_modules"
   },
   "devDependencies": {
     "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "baseline-browser-mapping": "^2.9.0",
-    "electron": "^39.2.4",
-    "electron-builder": "^25.1.8",
-    "eslint": "^9",
-    "eslint-config-next": "16.0.3",
     "typescript": "^5"
-  },
-  "build": {
-    "appId": "com.onestarstream.app",
-    "mac": {
-      "target": [
-        "dmg",
-        "pkg"
-      ],
-      "category": "public.app-category.music"
-    },
-    "files": [
-      "electron/dist/**/*",
-      "package.json"
-    ]
   }
 }

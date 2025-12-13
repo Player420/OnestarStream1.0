@@ -10,18 +10,21 @@ import { randomBytes } from 'crypto';
  * CLIENT-SIDE SHARING WORKFLOW (zero plaintext key leakage):
  * 
  * UPDATED FOR PERSISTENT KEYPAIRS (Phase 16 Step 6):
+ * UPDATED FOR KEY ROTATION (Phase 19):
  * 
  * SENDER SIDE:
  * 1. Sender unlocks vault → loads persistent keypair (preload)
- * 2. Sender plays media → unwraps mediaKey with own private keypair
- * 3. Sender fetches recipient's public key (from server or direct exchange)
- * 4. Sender re-wraps mediaKey with recipient's public key (PQ-hybrid KEM)
- * 5. POST to this endpoint: { licenseId, recipientUserId, wrappedKey }
+ * 2. Sender plays media → unwraps mediaKey with own private keypair (current or previous)
+ * 3. Sender fetches recipient's CURRENT public key (from server or direct exchange)
+ *    - Phase 19: ALWAYS use recipient's currentKeypair.publicKey
+ *    - Forward secrecy: Share uses recipient's new key after rotation
+ * 4. Sender re-wraps mediaKey with recipient's CURRENT public key (PQ-hybrid KEM)
+ * 5. POST to this endpoint: { licenseId, recipientUserId, wrappedKey, publicKeyId }
  * 
  * RECIPIENT SIDE:
  * 1. Recipient unlocks vault → loads persistent keypair
  * 2. Recipient fetches shared media from inbox
- * 3. Recipient unwraps mediaKey with own private keypair
+ * 3. Recipient unwraps mediaKey with own private keypair (current first, fallback to previous)
  * 4. Recipient decrypts media with mediaKey
  * 
  * BENEFITS OF PERSISTENT KEYPAIRS:
@@ -29,6 +32,11 @@ import { randomBytes } from 'crypto';
  * - Recipient can decrypt shared media across sessions
  * - Forward secrecy via ephemeral X25519 keys in PQ-hybrid KEM
  * - Post-quantum secure (Kyber-768 + X25519 hybrid)
+ * 
+ * PHASE 19 KEY ROTATION:
+ * - Share always uses recipient's currentKeypair.publicKey (forward secrecy)
+ * - Recipient can decrypt with current or previous keys (backward compat)
+ * - Server stores wrappedToPublicKey metadata for tracking
  * 
  * BACKWARD COMPATIBILITY:
  * - Old format: Password-based wrapping (deprecated)
@@ -43,7 +51,10 @@ export interface ShareRequest {
   recipientUserId: string; // Recipient's user ID
   
   // Wrapped key for recipient (encrypted with recipient's key)
-  wrappedKey: string; // Base64-encoded
+  wrappedKey: string; // Base64-encoded OR PQ-hybrid JSON
+  
+  // Phase 19: Recipient's public key keyId for rotation tracking
+  recipientPublicKeyId?: string;
   
   // Optional share message
   message?: string;

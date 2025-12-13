@@ -36,7 +36,7 @@ function attachElement(el: HTMLAudioElement) {
 }
 
 /***************************************************************************************************
- * MEDIA PLAYER
+ * MEDIA PLAYER (Phase 18: Streaming Decryption)
  **************************************************************************************************/
 function MediaPlayer({
   item,
@@ -47,14 +47,151 @@ function MediaPlayer({
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [encryptedBlobUrl, setEncryptedBlobUrl] = useState<string | null>(null);
+  const [streamingMode, setStreamingMode] = useState<boolean>(false);
   const cleanupRef = useRef<(() => void) | null>(null);
+  const mediaSourceRef = useRef<MediaSource | null>(null);
+  const sourceBufferRef = useRef<SourceBuffer | null>(null);
 
   const visibility = item.protected ? "protected" : "public";
   const encoded = encodeURIComponent(item.fileName);
   const src = `onestar://media/${visibility}/${encoded}`;
 
   /***************************************************************************************************
-   * Load encrypted media (PQ-Hybrid decryption in preload)
+   * Phase 18: Streaming decryption with MediaSource API
+   **************************************************************************************************/
+  const loadStreamingMedia = async () => {
+    const w = window as any;
+    if (!w.onestar?.openEncryptedStream) {
+      console.warn('[MediaPlayer] openEncryptedStream not available, falling back to monolithic');
+      await loadEncryptedMedia();
+      return;
+    }
+
+    // Check MediaSource support
+    if (typeof MediaSource === 'undefined') {
+      console.warn('[MediaPlayer] MediaSource API not supported, falling back to monolithic');
+      await loadEncryptedMedia();
+      return;
+    }
+
+    try {
+      console.log('[MediaPlayer] Starting streaming decryption:', item.id);
+      
+      // Fetch metadata to get MIME type
+      const response = await fetch(`/api/encrypted-media/get/${item.id}`);
+      const data = await response.json();
+      
+      if (!data.ok) {
+        throw new Error('Failed to fetch media metadata');
+      }
+
+      const mimeType = data.metadata?.mimeType || 'audio/mpeg';
+      const codecs = mimeType.includes('audio') ? 'mp3' : '';
+      const fullMimeType = codecs ? `${mimeType}; codecs="${codecs}"` : mimeType;
+
+      // Check if MIME type is supported
+      if (!MediaSource.isTypeSupported(fullMimeType)) {
+        console.warn(`[MediaPlayer] MIME type ${fullMimeType} not supported, falling back`);
+        await loadEncryptedMedia();
+        return;
+      }
+
+      // Create MediaSource
+      const mediaSource = new MediaSource();
+      mediaSourceRef.current = mediaSource;
+      const objectUrl = URL.createObjectURL(mediaSource);
+      
+      setStreamingMode(true);
+      setEncryptedBlobUrl(objectUrl);
+
+      // Wait for MediaSource to open
+      await new Promise<void>((resolve, reject) => {
+        mediaSource.addEventListener('sourceopen', () => resolve(), { once: true });
+        mediaSource.addEventListener('error', (e) => reject(e), { once: true });
+        
+        // Set audio source to trigger sourceopen
+        if (audioRef.current) {
+          audioRef.current.src = objectUrl;
+        }
+      });
+
+      console.log('[MediaPlayer] MediaSource opened, creating SourceBuffer');
+
+      // Create SourceBuffer
+      const sourceBuffer = mediaSource.addSourceBuffer(fullMimeType);
+      sourceBufferRef.current = sourceBuffer;
+
+      // Stream and append chunks
+      const stream = await w.onestar.openEncryptedStream(item.id);
+      let chunkCount = 0;
+
+      for await (const chunk of stream) {
+        // Wait for SourceBuffer to be ready
+        while (sourceBuffer.updating) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+
+        // Append decrypted chunk
+        sourceBuffer.appendBuffer(chunk);
+        chunkCount++;
+
+        // Backpressure: wait for append to complete
+        await new Promise<void>((resolve) => {
+          sourceBuffer.addEventListener('updateend', () => resolve(), { once: true });
+        });
+
+        // Log progress
+        if (chunkCount % 10 === 0) {
+          console.log(`[MediaPlayer] Streamed ${chunkCount} chunks`);
+        }
+      }
+
+      console.log(`[MediaPlayer] Streaming complete: ${chunkCount} chunks`);
+
+      // Signal end of stream
+      if (mediaSource.readyState === 'open') {
+        mediaSource.endOfStream();
+      }
+
+      // Cleanup function
+      cleanupRef.current = () => {
+        if (sourceBufferRef.current && mediaSourceRef.current) {
+          try {
+            if (mediaSourceRef.current.readyState === 'open') {
+              mediaSourceRef.current.endOfStream();
+            }
+          } catch (e) {
+            console.warn('[MediaPlayer] MediaSource cleanup error:', e);
+          }
+        }
+        sourceBufferRef.current = null;
+        mediaSourceRef.current = null;
+      };
+
+    } catch (error) {
+      console.error('[MediaPlayer] Streaming decryption failed:', error);
+      console.warn('[MediaPlayer] Falling back to monolithic decryption');
+      
+      // Cleanup failed MediaSource
+      if (mediaSourceRef.current) {
+        try {
+          if (mediaSourceRef.current.readyState === 'open') {
+            mediaSourceRef.current.endOfStream();
+          }
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+        mediaSourceRef.current = null;
+      }
+      
+      // Fallback to monolithic decryption
+      setStreamingMode(false);
+      await loadEncryptedMedia();
+    }
+  };
+
+  /***************************************************************************************************
+   * Phase 17: Monolithic decryption (fallback for unsupported formats)
    **************************************************************************************************/
   const loadEncryptedMedia = async () => {
     const w = window as any;
@@ -64,7 +201,7 @@ function MediaPlayer({
     }
 
     try {
-      console.log('[MediaPlayer] Loading encrypted media:', item.id);
+      console.log('[MediaPlayer] Loading encrypted media (monolithic):', item.id);
       const result = await w.onestar.unwrapAndDecryptMedia(item.id);
       
       console.log('[MediaPlayer] Decryption successful:', {
@@ -74,6 +211,7 @@ function MediaPlayer({
 
       // Set Blob URL for playback
       setEncryptedBlobUrl(result.blobUrl);
+      setStreamingMode(false);
       
       // Store cleanup function
       cleanupRef.current = result.cleanup;
@@ -105,13 +243,14 @@ function MediaPlayer({
 
     attachElement(el);
     
-    // Try encrypted playback first (if media is encrypted)
-    // Fall back to legacy HD buffer loading if not
+    // Phase 18: Try streaming decryption first, fallback to monolithic
     const initPlayback = async () => {
       // Check if this is encrypted media (has licenseId in database)
       if (item.licenseId && item.protected) {
-        await loadEncryptedMedia();
+        // Try streaming first (Phase 18)
+        await loadStreamingMedia();
       } else {
+        // Legacy HD buffer loading for unencrypted media
         await doLoadHD();
       }
     };
@@ -152,7 +291,7 @@ function MediaPlayer({
       if (cleanupTracking) cleanupTracking();
       pauseHD();
       
-      // SECURITY: Cleanup encrypted Blob URL
+      // SECURITY: Cleanup encrypted media (both streaming and monolithic)
       if (cleanupRef.current) {
         console.log('[MediaPlayer] Cleaning up encrypted media');
         cleanupRef.current();
@@ -162,6 +301,19 @@ function MediaPlayer({
         URL.revokeObjectURL(encryptedBlobUrl);
         setEncryptedBlobUrl(null);
       }
+      
+      // Cleanup MediaSource if streaming
+      if (mediaSourceRef.current) {
+        try {
+          if (mediaSourceRef.current.readyState === 'open') {
+            mediaSourceRef.current.endOfStream();
+          }
+        } catch (e) {
+          console.warn('[MediaPlayer] MediaSource cleanup error:', e);
+        }
+        mediaSourceRef.current = null;
+      }
+      sourceBufferRef.current = null;
     };
   }, [item.id, currentUser?.id, encryptedBlobUrl]);
 
@@ -173,6 +325,12 @@ function MediaPlayer({
     if (!isNaN(dur) && dur > 0) {
       const w = window as any;
       w.onestar?.audio?.setAudioDuration?.(dur);
+      
+      console.log('[MediaPlayer] Loaded metadata:', {
+        duration: dur,
+        streaming: streamingMode,
+        mediaId: item.id,
+      });
     }
   };
 
@@ -183,6 +341,11 @@ function MediaPlayer({
     <div style={{ width: "100%", marginBottom: 20 }}>
       <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
         {item.title || "Untitled"}
+        {streamingMode && (
+          <span style={{ fontSize: 11, color: 'green', marginLeft: 8 }}>
+            [Streaming ⚡]
+          </span>
+        )}
       </div>
 
       <audio
@@ -197,7 +360,13 @@ function MediaPlayer({
         onPause={() => pauseHD()}
         onSeeking={() => {
           const el = audioRef.current;
-          if (el) seekHD(el.currentTime);
+          if (el) {
+            seekHD(el.currentTime);
+            console.log('[MediaPlayer] Seeking:', {
+              time: el.currentTime,
+              streaming: streamingMode,
+            });
+          }
         }}
         onError={(e) => {
           const a = e.currentTarget;
@@ -205,6 +374,7 @@ function MediaPlayer({
             err: a.error,
             src: audioSrc,
             encrypted: !!encryptedBlobUrl,
+            streaming: streamingMode,
             networkState: a.networkState,
             readyState: a.readyState,
           });

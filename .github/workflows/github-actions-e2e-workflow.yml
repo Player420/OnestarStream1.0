@@ -1,0 +1,159 @@
+name: Phase 23 E2E Tests
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+jobs:
+  e2e-tests:
+    name: E2E Test Suite
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+      fail-fast: false
+    
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install system dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            xvfb \
+            libgtk-3-0 \
+            libnotify4 \
+            libnss3 \
+            libxss1 \
+            libxtst6 \
+            libasound2 \
+            libatk-bridge2.0-0 \
+            libgbm1 \
+            xdg-utils
+      
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build Electron app
+        run: |
+          npx tsc --project electron/tsconfig.json
+        env:
+          NODE_ENV: production
+      
+      - name: Start Next.js dev server
+        run: |
+          npm run dev &
+          echo $! > next-server.pid
+          npx wait-on http://localhost:3000 --timeout 60000
+      
+      - name: Run E2E tests (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_on: error
+          command: |
+            xvfb-run --auto-servernum \
+              --server-args="-screen 0 1024x768x24 -ac -nolisten tcp -dpi 96 +extension RANDR" \
+              npm run test:e2e
+        env:
+          TEST_MODE: '1'
+          NODE_ENV: test
+          DISPLAY: ':99.0'
+      
+      - name: Run E2E tests (macOS)
+        if: matrix.os == 'macos-latest'
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_on: error
+          command: npm run test:e2e
+        env:
+          TEST_MODE: '1'
+          NODE_ENV: test
+      
+      - name: Stop Next.js dev server
+        if: always()
+        run: |
+          if [ -f next-server.pid ]; then
+            kill $(cat next-server.pid) || true
+            rm next-server.pid
+          fi
+      
+      - name: Capture screenshots on failure
+        if: failure()
+        run: |
+          mkdir -p artifacts/screenshots
+          find . -name "*.png" -path "*/tests/electron-e2e/*" -exec cp {} artifacts/screenshots/ \; || true
+      
+      - name: Capture logs on failure
+        if: failure()
+        run: |
+          mkdir -p artifacts/logs
+          find . -name "*.log" -path "*/tests/electron-e2e/*" -exec cp {} artifacts/logs/ \; || true
+          # Capture Electron crash logs (macOS)
+          if [ -d "$HOME/Library/Logs/Electron" ]; then
+            cp -r "$HOME/Library/Logs/Electron" artifacts/logs/ || true
+          fi
+          # Capture Electron crash logs (Linux)
+          if [ -d "$HOME/.config/Electron/logs" ]; then
+            cp -r "$HOME/.config/Electron/logs" artifacts/logs/ || true
+          fi
+      
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-artifacts-${{ matrix.os }}-${{ github.run_number }}
+          path: artifacts/
+          retention-days: 7
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}-${{ github.run_number }}
+          path: |
+            tests/electron-e2e/*.log
+            tests/electron-e2e/test-results.json
+          retention-days: 7
+      
+      - name: Report test status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ E2E tests passed on ${{ matrix.os }}"
+          else
+            echo "❌ E2E tests failed on ${{ matrix.os }}"
+            echo "See artifacts for screenshots and logs"
+          fi

@@ -374,3 +374,151 @@ export async function getWrappedKey(
   
   return license.wrappedKeys[userId] || null;
 }
+
+// -----------------------------------------------------------------------------
+// PHASE 19: KEY ROTATION INTEGRATION
+// -----------------------------------------------------------------------------
+
+/**
+ * Media metadata for key rotation engine
+ */
+export interface EncryptedMediaMetadata {
+  licenseId: string;
+  mediaBlobId: string;
+  wrappedKey: Uint8Array | string; // Current user's wrapped key
+  wrappedToPublicKey?: string; // Public key keyId used for wrapping (Phase 19)
+  mimeType: string;
+  mediaHash: string;
+}
+
+/**
+ * List all encrypted media metadata for a user (for key rotation).
+ * 
+ * Used by MediaKeyReWrapper to fetch all media that needs re-wrapping.
+ * 
+ * @param userId - User ID
+ * @returns Array of media metadata with wrapped keys
+ */
+export async function listAllEncryptedMediaMetadata(userId: string): Promise<EncryptedMediaMetadata[]> {
+  try {
+    const licenses = await getByOwner(userId);
+    
+    const metadata: EncryptedMediaMetadata[] = [];
+    
+    for (const license of licenses) {
+      const wrappedKey = license.wrappedKeys[userId];
+      if (!wrappedKey) {
+        console.warn(`[mediaLicenses.table] User ${userId} has no wrapped key for license ${license.licenseId}`);
+        continue;
+      }
+      
+      metadata.push({
+        licenseId: license.licenseId,
+        mediaBlobId: license.mediaBlobId,
+        wrappedKey,
+        wrappedToPublicKey: (license.metadata as any).wrappedToPublicKey,
+        mimeType: license.metadata.mimeType,
+        mediaHash: license.metadata.mediaHash,
+      });
+    }
+    
+    console.log(`[mediaLicenses.table] Found ${metadata.length} media items for user ${userId}`);
+    return metadata;
+  } catch (err) {
+    console.error(`[mediaLicenses.table] Failed to list media metadata for user ${userId}:`, err);
+    throw err;
+  }
+}
+
+/**
+ * Update wrapped key for a user after key rotation.
+ * 
+ * WORKFLOW:
+ * 1. Rotation engine unwraps mediaKey with old keypair
+ * 2. Rotation engine re-wraps mediaKey with new keypair
+ * 3. Rotation engine calls this function to update database
+ * 4. Metadata updated with new public key keyId
+ * 
+ * @param licenseId - License ID
+ * @param userId - User ID
+ * @param newWrappedKey - New wrapped key (Uint8Array for legacy, string for PQ-hybrid)
+ * @param newPublicKeyId - New public key keyId (for tracking)
+ */
+export async function updateWrappedKey(
+  licenseId: string,
+  userId: string,
+  newWrappedKey: Uint8Array | string,
+  newPublicKeyId: string
+): Promise<void> {
+  try {
+    const license = await get(licenseId);
+    if (!license) {
+      throw new Error(`License ${licenseId} not found`);
+    }
+    
+    // Update wrapped key
+    license.wrappedKeys[userId] = newWrappedKey;
+    
+    // Update metadata with new public key keyId
+    (license.metadata as any).wrappedToPublicKey = newPublicKeyId;
+    (license.metadata as any).lastReWrapped = new Date().toISOString();
+    
+    // Save updated license
+    const db = getDB();
+    const key = licenseKey(licenseId);
+    
+    const serialized = {
+      licenseId: license.licenseId,
+      ownerUserId: license.ownerUserId,
+      mediaBlobId: license.mediaBlobId,
+      wrappedKeys: serializeWrappedKeys(license.wrappedKeys),
+      metadata: license.metadata,
+      createdAt: license.createdAt,
+    };
+    
+    await db.put(key, JSON.stringify(serialized));
+    
+    console.log(`[mediaLicenses.table] Updated wrapped key for license ${licenseId}, user ${userId}`);
+  } catch (err) {
+    console.error(`[mediaLicenses.table] Failed to update wrapped key for license ${licenseId}:`, err);
+    throw err;
+  }
+}
+
+/**
+ * Count encrypted media items for a user.
+ * 
+ * Used for progress tracking during key rotation.
+ * 
+ * @param userId - User ID
+ * @returns Number of media items
+ */
+export async function countEncryptedMedia(userId: string): Promise<number> {
+  try {
+    const licenses = await getByOwner(userId);
+    return licenses.length;
+  } catch (err) {
+    console.error(`[mediaLicenses.table] Failed to count media for user ${userId}:`, err);
+    return 0;
+  }
+}
+
+/**
+ * Get public key keyId used to wrap media (for rotation tracking).
+ * 
+ * @param licenseId - License ID
+ * @returns Public key keyId or null if not set
+ */
+export async function getPublicKeyForMedia(licenseId: string): Promise<string | null> {
+  try {
+    const license = await get(licenseId);
+    if (!license) {
+      return null;
+    }
+    
+    return (license.metadata as any).wrappedToPublicKey || null;
+  } catch (err) {
+    console.error(`[mediaLicenses.table] Failed to get public key for license ${licenseId}:`, err);
+    return null;
+  }
+}

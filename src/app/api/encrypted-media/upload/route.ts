@@ -10,23 +10,31 @@ import { randomUUID } from 'crypto';
  * CLIENT-SIDE UPLOAD WORKFLOW (zero plaintext key leakage):
  * 
  * UPDATED FOR PERSISTENT KEYPAIRS (Phase 16 Step 6):
+ * UPDATED FOR KEY ROTATION (Phase 19):
  * 
  * 1. User unlocks vault with password → loads persistent keypair (client-side preload)
  * 2. User selects media file → reads plaintext (client-side)
  * 3. Compute mediaHash = SHA-256(plaintext) (client-side)
  * 4. Generate random mediaKey (client-side)
  * 5. Encrypt media: ciphertext = AES-256-GCM(plaintext, mediaKey) (client-side)
- * 6. Get user's public key: publicKey = window.onestar.getUserPublicKey() (client-side)
+ * 6. Get user's CURRENT public key: publicKey = window.onestar.getUserPublicKey() (client-side)
+ *    - Phase 19: ALWAYS uses currentKeypair.publicKey from keystore v3
+ *    - Forward secrecy: New media uses new key after rotation
  * 7. Wrap key: wrappedKey = PQ-Hybrid-KEM(mediaKey, publicKey) (client-side)
  *    - wrappedKey is now HybridCiphertext JSON (Kyber + X25519)
  * 8. Compute licenseId = SHA-256(mediaHash + uploaderDID) (client-side)
- * 9. POST to this endpoint: { ciphertext, wrappedKey, metadata }
+ * 9. POST to this endpoint: { ciphertext, wrappedKey, metadata, publicKeyId }
  * 
  * BENEFITS OF PERSISTENT KEYPAIRS:
  * - Media wrapped with user's long-lived public key
  * - Playback works across app restarts (keypair survives)
  * - Inbox/share workflows use same persistent keypair
  * - Server never sees private keys (encrypted at rest, preload-only in memory)
+ * 
+ * PHASE 19 KEY ROTATION:
+ * - Upload always uses currentKeypair.publicKey (forward secrecy)
+ * - Old media can still be decrypted with previousKeypairs[] (backward compat)
+ * - Server stores wrappedToPublicKey metadata for tracking
  * 
  * BACKWARD COMPATIBILITY:
  * - Old format: Base64-encoded AES-wrapped key (password-based)
@@ -51,10 +59,13 @@ export interface UploadRequest {
   mediaType: 'audio' | 'video' | 'image';
   
   // Wrapped media key (encrypted with user's vault key)
-  wrappedKey: string; // Base64-encoded encrypted mediaKey
+  wrappedKey: string; // Base64-encoded encrypted mediaKey OR PQ-hybrid JSON
   wrapIV: string; // Base64-encoded wrapping IV
-  wrapMethod: 'password-pbkdf2'; // Currently only password-based
+  wrapMethod: 'password-pbkdf2' | 'pq-hybrid-kem'; // Wrapping method
   wrapMetadata?: string; // JSON: { salt?, iterations? } - if needed
+  
+  // Phase 19: Public key keyId for rotation tracking
+  publicKeyId?: string; // Current public key keyId (from keystore v3)
 }
 
 export async function POST(req: NextRequest) {
@@ -123,7 +134,10 @@ export async function POST(req: NextRequest) {
         mediaHash: body.mediaHash,
         mimeType: body.mimeType || 'application/octet-stream',
         title: body.title,
-      },
+        // Phase 19: Store public key keyId for rotation tracking
+        ...{ wrappedToPublicKey: body.publicKeyId || 'unknown' },
+        ...{ uploadedAt: new Date().toISOString() },
+      } as any,
       createdAt: Date.now(),
     });
 

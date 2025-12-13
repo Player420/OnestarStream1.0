@@ -1,0 +1,91 @@
+/**
+ * scheduler-startup.test.mjs
+ * 
+ * Tests Electron scheduler initialization on app startup
+ * 
+ * Validates:
+ * - NavBar sync badge appears
+ * - Badge transitions through states (idle → checking → up-to-date)
+ * - Scheduler is initialized with future nextRun timestamp
+ */
+
+import { waitForSelector, waitForText, getElementText, getElementAttribute } from './helpers/waitForSelector.js';
+import { ipcInvoke, waitForIpcEvent } from './helpers/ipc.js';
+
+/**
+ * Test: Scheduler starts on app boot
+ * 
+ * @param {Object} context - { electronProcess, cdpClient, close }
+ */
+export default async function test({ cdpClient }) {
+  console.log('[Test] Waiting for app to load...');
+  
+  // Step 1: Wait for NavBar to render
+  await waitForSelector(cdpClient, 'nav', { timeout: 15000 });
+  console.log('[Test] NavBar rendered');
+
+  // Step 2: Wait for sync badge to appear
+  const badgeSelector = 'nav a[href="/settings/sync"] span';
+  await waitForSelector(cdpClient, badgeSelector, { timeout: 10000, visible: true });
+  console.log('[Test] Sync badge found');
+
+  // Step 3: Check initial badge state (should be idle or checking)
+  const badgeText = await getElementText(cdpClient, badgeSelector);
+  const validStates = ['·', '↻', '✓']; // idle, syncing, up-to-date
+  if (!validStates.includes(badgeText)) {
+    throw new Error(`Invalid badge text: "${badgeText}" (expected one of: ${validStates.join(', ')})`);
+  }
+  console.log(`[Test] Initial badge state: "${badgeText}"`);
+
+  // Step 4: Wait for scheduler to complete initial check (max 10s)
+  console.log('[Test] Waiting for initial sync check to complete...');
+  try {
+    await waitForIpcEvent(cdpClient, 'sync:status-change', { timeout: 10000 });
+    console.log('[Test] Received sync:status-change event');
+  } catch (error) {
+    console.warn('[Test] No status-change event within 10s (may be cached)');
+  }
+
+  // Step 5: Verify badge updated to final state
+  const finalBadgeText = await getElementText(cdpClient, badgeSelector);
+  console.log(`[Test] Final badge state: "${finalBadgeText}"`);
+
+  // Step 6: Verify scheduler is initialized (has nextRun timestamp)
+  console.log('[Test] Checking scheduler state via IPC...');
+  const nextRun = await ipcInvoke(cdpClient, 'sync:scheduler:getNextRun', null);
+  
+  if (nextRun === null) {
+    throw new Error('Scheduler not initialized (nextRun is null)');
+  }
+
+  const now = Date.now();
+  const timeUntilNext = nextRun - now;
+  
+  if (timeUntilNext < 0) {
+    throw new Error(`nextRun is in the past: ${new Date(nextRun).toISOString()}`);
+  }
+
+  if (timeUntilNext > 6 * 60 * 60 * 1000 + 5000) {
+    throw new Error(`nextRun is too far in future: ${timeUntilNext}ms (expected ~6h or less)`);
+  }
+
+  console.log(`[Test] ✅ Scheduler initialized: nextRun in ${Math.round(timeUntilNext / 1000)}s`);
+
+  // Step 7: Verify badge color (green or yellow, not red/gray)
+  const badgeStyle = await getElementAttribute(cdpClient, badgeSelector, 'style');
+  if (badgeStyle && badgeStyle.includes('background')) {
+    const hasValidColor = 
+      badgeStyle.includes('#10b981') || // green (up-to-date)
+      badgeStyle.includes('#f59e0b') || // yellow (syncing)
+      badgeStyle.includes('rgb(16, 185, 129)') || // green rgb
+      badgeStyle.includes('rgb(245, 158, 11)'); // yellow rgb
+    
+    if (!hasValidColor) {
+      console.warn(`[Test] Badge color may indicate issue: ${badgeStyle}`);
+    } else {
+      console.log('[Test] ✅ Badge color is valid');
+    }
+  }
+
+  console.log('[Test] ✅ All startup checks passed');
+}

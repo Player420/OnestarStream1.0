@@ -1,0 +1,57 @@
+{
+  "name": "onestarstream-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "electron/dist/main.js",
+  "scripts": {
+    "dev": "next dev",
+    "build": "npm run build:sdk && npm run build:electron && next build",
+    "build:electron": "tsc -p electron/tsconfig.json",
+    "build:sdk": "cd ../../packages/onestar-db-sdk && npm run build",
+    "start": "next start",
+    "lint": "eslint",
+    "dev:electron": "ONESTAR_APP_URL=http://localhost:3000 npx electron .",
+    "dist": "electron-builder --mac",
+    "test:e2e": "node tests/electron-e2e/test-runner.js"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.0.1",
+    "@onestar/db": "file:../../../onestardb2",
+    "@onestar/db-sdk": "file:../../packages/onestar-db-sdk",
+    "argon2": "^0.44.0",
+    "cookie": "^1.1.1",
+    "crystals-kyber-js": "^2.5.0",
+    "mime": "^4.1.0",
+    "next": "^16.0.8",
+    "nodemailer": "^7.0.11",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "baseline-browser-mapping": "^2.9.0",
+    "chrome-remote-interface": "^0.31.0",
+    "electron": "^39.2.4",
+    "electron-builder": "^25.1.8",
+    "eslint": "^9",
+    "eslint-config-next": "16.0.3",
+    "typescript": "^5"
+  },
+  "build": {
+    "appId": "com.onestarstream.app",
+    "mac": {
+      "target": [
+        "dmg",
+        "pkg"
+      ],
+      "category": "public.app-category.music"
+    },
+    "files": [
+      "electron/dist/**/*",
+      "package.json"
+    ]
+  }
+}

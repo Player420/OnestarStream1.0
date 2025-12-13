@@ -36,8 +36,10 @@ export default function LibraryPage() {
   const [items, setItems] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
 
-  // LOAD LIBRARY AFTER AUTH
+  // LOAD LIBRARY AFTER AUTH (Phase 18: Use local index for instant loading)
   useEffect(() => {
     if (auth !== true) return;
 
@@ -48,12 +50,56 @@ export default function LibraryPage() {
       try {
         if (
           typeof window === 'undefined' ||
-          !window.onestar ||
-          typeof window.onestar.listMedia !== 'function'
+          !window.onestar
         ) {
           setError(
             'Local media bridge not available. This page must run inside the Electron app.'
           );
+          setItems([]);
+          return;
+        }
+
+        // Phase 18: Try local media index first (instant)
+        if (typeof window.onestar.getLocalMediaIndex === 'function') {
+          console.log('[Library] Loading from local index...');
+          const localMedia = await window.onestar.getLocalMediaIndex();
+          
+          if (localMedia && Array.isArray(localMedia)) {
+            // Convert from local index format to MediaItem format
+            const converted = localMedia.map((item: any) => ({
+              id: item.id,
+              title: item.title || 'Untitled',
+              fileName: item.title || 'unknown',
+              type: item.mimeType?.startsWith('audio/') ? 'audio' as MediaType 
+                    : item.mimeType?.startsWith('video/') ? 'video' as MediaType 
+                    : 'image' as MediaType,
+              sizeBytes: item.fileSize || 0,
+              createdAt: item.createdAt,
+              protected: true, // Local index only stores encrypted media
+            }));
+            
+            converted.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+            setItems(converted);
+            console.log(`[Library] Loaded ${converted.length} items from local index`);
+            
+            // Get last sync time
+            if (typeof window.onestar.getMediaIndexStats === 'function') {
+              const stats = await window.onestar.getMediaIndexStats();
+              setLastSyncTime(stats.lastUpdated);
+            }
+            
+            setLoading(false);
+            
+            // Background sync to keep index fresh (don't block UI)
+            backgroundSync();
+            return;
+          }
+        }
+
+        // Fallback: Use listMedia API (legacy path)
+        console.log('[Library] Local index not available, using listMedia...');
+        if (typeof window.onestar.listMedia !== 'function') {
+          setError('Media listing not available');
           setItems([]);
           return;
         }
@@ -78,6 +124,46 @@ export default function LibraryPage() {
     void load();
   }, [auth]);
 
+  // Background sync function (Phase 18)
+  const backgroundSync = async () => {
+    if (syncing) return;
+    
+    setSyncing(true);
+    try {
+      if (window.onestar?.refreshLocalMediaIndex) {
+        console.log('[Library] Background sync started...');
+        const count = await window.onestar.refreshLocalMediaIndex();
+        console.log(`[Library] Background sync complete: ${count} items`);
+        
+        // Reload from index after sync
+        if (window.onestar.getLocalMediaIndex) {
+          const localMedia = await window.onestar.getLocalMediaIndex();
+          if (localMedia && Array.isArray(localMedia)) {
+            const converted = localMedia.map((item: any) => ({
+              id: item.id,
+              title: item.title || 'Untitled',
+              fileName: item.title || 'unknown',
+              type: item.mimeType?.startsWith('audio/') ? 'audio' as MediaType 
+                    : item.mimeType?.startsWith('video/') ? 'video' as MediaType 
+                    : 'image' as MediaType,
+              sizeBytes: item.fileSize || 0,
+              createdAt: item.createdAt,
+              protected: true,
+            }));
+            
+            converted.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+            setItems(converted);
+            setLastSyncTime(new Date().toISOString());
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[Library] Background sync failed:', err);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   // AUTH ROUTING
   if (auth === null) return <main style={{ padding: 24 }}>Checking session…</main>;
   if (auth === false) redirect('/auth/signin');
@@ -97,13 +183,34 @@ export default function LibraryPage() {
       >
         <div>
           <h1 style={{ marginBottom: 4 }}>OnestarStream</h1>
-          <p style={{ opacity: 0.7 }}>Library – your local media</p>
+          <p style={{ opacity: 0.7 }}>
+            Library – your local media
+            {lastSyncTime && (
+              <span style={{ fontSize: 11, marginLeft: 8 }}>
+                (synced: {new Date(lastSyncTime).toLocaleTimeString()})
+              </span>
+            )}
+          </p>
         </div>
 
         <nav style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           <a href="/upload">Upload</a>
           <a href="/library">Library</a>
           <a href="/app">Player</a>
+          {!loading && (
+            <button
+              onClick={backgroundSync}
+              disabled={syncing}
+              style={{
+                fontSize: 12,
+                padding: '4px 8px',
+                cursor: syncing ? 'wait' : 'pointer',
+                opacity: syncing ? 0.5 : 1,
+              }}
+            >
+              {syncing ? 'Syncing...' : '🔄 Sync'}
+            </button>
+          )}
         </nav>
       </header>
 

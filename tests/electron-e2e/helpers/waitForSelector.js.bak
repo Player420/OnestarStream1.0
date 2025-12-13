@@ -1,0 +1,238 @@
+/**
+ * waitForSelector.js
+ * 
+ * Promise-based DOM polling utilities for E2E testing
+ */
+
+/**
+ * Wait for a DOM selector to appear in the page
+ * 
+ * @param {Object} cdpClient - Chrome DevTools Protocol client
+ * @param {string} selector - CSS selector to wait for
+ * @param {Object} options
+ * @param {number} options.timeout - Timeout in ms (default: 10000)
+ * @param {number} options.pollInterval - Poll interval in ms (default: 100)
+ * @param {boolean} options.visible - Wait for element to be visible (default: false)
+ * @returns {Promise<void>}
+ */
+export async function waitForSelector(cdpClient, selector, options = {}) {
+  const {
+    timeout = 10000,
+    pollInterval = 100,
+    visible = false,
+  } = options;
+
+  const startTime = Date.now();
+  const { Runtime } = cdpClient;
+
+  while (Date.now() - startTime < timeout) {
+    try {
+      const { result } = await Runtime.evaluate({
+        expression: `
+          (() => {
+            const element = document.querySelector('${selector.replace(/'/g, "\\'")}');
+            if (!element) return false;
+            ${visible ? `
+            const rect = element.getBoundingClientRect();
+            const style = window.getComputedStyle(element);
+            return style.display !== 'none' && 
+                   style.visibility !== 'hidden' && 
+                   rect.width > 0 && 
+                   rect.height > 0;
+            ` : 'return true;'}
+          })()
+        `,
+        returnByValue: true,
+      });
+
+      if (result.value === true) {
+        return;
+      }
+    } catch (error) {
+      // Ignore evaluation errors and continue polling
+    }
+
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+  }
+
+  throw new Error(`Timeout waiting for selector: ${selector}`);
+}
+
+/**
+ * Wait for element text content to match
+ * 
+ * @param {Object} cdpClient - Chrome DevTools Protocol client
+ * @param {string} selector - CSS selector
+ * @param {string|RegExp} expectedText - Expected text content
+ * @param {Object} options
+ * @returns {Promise<void>}
+ */
+export async function waitForText(cdpClient, selector, expectedText, options = {}) {
+  const {
+    timeout = 10000,
+    pollInterval = 100,
+  } = options;
+
+  const startTime = Date.now();
+  const { Runtime } = cdpClient;
+  const isRegex = expectedText instanceof RegExp;
+
+  while (Date.now() - startTime < timeout) {
+    try {
+      const { result } = await Runtime.evaluate({
+        expression: `
+          (() => {
+            const element = document.querySelector('${selector.replace(/'/g, "\\'")}');
+            if (!element) return null;
+            return element.textContent || element.innerText || '';
+          })()
+        `,
+        returnByValue: true,
+      });
+
+      const actualText = result.value;
+      
+      if (actualText !== null) {
+        if (isRegex) {
+          if (expectedText.test(actualText)) {
+            return;
+          }
+        } else {
+          if (actualText.includes(expectedText)) {
+            return;
+          }
+        }
+      }
+    } catch (error) {
+      // Ignore evaluation errors
+    }
+
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+  }
+
+  throw new Error(`Timeout waiting for text "${expectedText}" in selector: ${selector}`);
+}
+
+/**
+ * Wait for a condition to be true
+ * 
+ * @param {Function} condition - Async function that returns boolean
+ * @param {Object} options
+ * @returns {Promise<void>}
+ */
+export async function waitForCondition(condition, options = {}) {
+  const {
+    timeout = 10000,
+    pollInterval = 100,
+  } = options;
+
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < timeout) {
+    try {
+      const result = await condition();
+      if (result === true) {
+        return;
+      }
+    } catch (error) {
+      // Ignore errors and continue polling
+    }
+
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+  }
+
+  throw new Error('Timeout waiting for condition');
+}
+
+/**
+ * Click an element by selector
+ * 
+ * @param {Object} cdpClient - Chrome DevTools Protocol client
+ * @param {string} selector - CSS selector
+ * @returns {Promise<void>}
+ */
+export async function clickElement(cdpClient, selector) {
+  const { Runtime } = cdpClient;
+
+  // Wait for element to be clickable
+  await waitForSelector(cdpClient, selector, { visible: true });
+
+  // Click the element
+  const { result } = await Runtime.evaluate({
+    expression: `
+      (() => {
+        const element = document.querySelector('${selector.replace(/'/g, "\\'")}');
+        if (!element) return false;
+        element.click();
+        return true;
+      })()
+    `,
+    returnByValue: true,
+  });
+
+  if (!result.value) {
+    throw new Error(`Failed to click element: ${selector}`);
+  }
+}
+
+/**
+ * Get element text content
+ * 
+ * @param {Object} cdpClient - Chrome DevTools Protocol client
+ * @param {string} selector - CSS selector
+ * @returns {Promise<string>}
+ */
+export async function getElementText(cdpClient, selector) {
+  const { Runtime } = cdpClient;
+
+  const { result } = await Runtime.evaluate({
+    expression: `
+      (() => {
+        const element = document.querySelector('${selector.replace(/'/g, "\\'")}');
+        if (!element) return null;
+        return element.textContent || element.innerText || '';
+      })()
+    `,
+    returnByValue: true,
+  });
+
+  return result.value;
+}
+
+/**
+ * Get element attribute value
+ * 
+ * @param {Object} cdpClient - Chrome DevTools Protocol client
+ * @param {string} selector - CSS selector
+ * @param {string} attribute - Attribute name
+ * @returns {Promise<string|null>}
+ */
+export async function getElementAttribute(cdpClient, selector, attribute) {
+  const { Runtime } = cdpClient;
+
+  const { result } = await Runtime.evaluate({
+    expression: `
+      (() => {
+        const element = document.querySelector('${selector.replace(/'/g, "\\'")}');
+        if (!element) return null;
+        return element.getAttribute('${attribute.replace(/'/g, "\\'")}');
+      })()
+    `,
+    returnByValue: true,
+  });
+
+  return result.value;
+}
+
+/**
+ * Navigate to a URL
+ * 
+ * @param {Object} cdpClient - Chrome DevTools Protocol client
+ * @param {string} url - URL to navigate to
+ * @returns {Promise<void>}
+ */
+export async function navigate(cdpClient, url) {
+  const { Page } = cdpClient;
+  await Page.navigate({ url });
+  await Page.loadEventFired();
+}

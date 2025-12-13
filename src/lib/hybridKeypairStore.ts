@@ -657,3 +657,182 @@ export function updateBiometricEnrollment(
     };
   }
 }
+
+/**
+ * PHASE 20: PREVIOUS KEYPAIRS LOADING
+ * 
+ * Load and decrypt historical keypairs for backward compatibility
+ */
+
+/**
+ * Keystore v3 types (imported from keypairRotation.ts conceptually)
+ */
+interface EncryptedKeypairV3 {
+  encryptedKeypair: string;
+  iv: string;
+  publicKey: {
+    kyber: string;
+    x25519: string;
+  };
+  createdAt: string;
+  keyId: string;
+}
+
+interface RetiredKeypairV3 extends EncryptedKeypairV3 {
+  retiredAt: string;
+  reason: string;
+}
+
+interface EncryptedKeystoreV3 {
+  version: 'v3';
+  algorithm: 'Kyber768-X25519-AES256GCM';
+  salt: string;
+  iterations: number;
+  currentKeypair: EncryptedKeypairV3;
+  previousKeypairs: RetiredKeypairV3[];
+  rotationHistory: any[];
+  rotationPolicy: any;
+  createdAt: string;
+  lastUnlockedAt?: string;
+  userId?: string;
+  biometric?: any;
+}
+
+/**
+ * Decrypted keypair with history metadata
+ */
+export interface DecryptedKeypairWithHistory {
+  keypair: DecryptedKeypair;
+  previousKeypairs: Array<{
+    keypair: HybridKeypair;
+    keyId: string;
+    createdAt: Date;
+    retiredAt: Date;
+    reason: string;
+  }>;
+  rotationHistory: any[];
+}
+
+/**
+ * Load and decrypt all previous keypairs from keystore v3
+ * 
+ * PHASE 20: Enable backward compatibility for media wrapped with old keys
+ * 
+ * SECURITY:
+ * - All keypairs encrypted with same password (user's vault password)
+ * - Failed decryption is non-fatal (partial history acceptable)
+ * - Private keys zeroized after use (caller's responsibility)
+ * 
+ * @param password - User's vault password
+ * @returns Array of decrypted previous keypairs
+ */
+export async function loadPreviousKeypairs(
+  password: string
+): Promise<Array<{
+  keypair: HybridKeypair;
+  keyId: string;
+  createdAt: Date;
+  retiredAt: Date;
+  reason: string;
+}>> {
+  const keystore = await loadKeystore();
+  
+  if (!keystore) {
+    console.warn('[HybridKeypairStore] No keystore found');
+    return [];
+  }
+  
+  // Check if v3 keystore
+  if ((keystore as any).version !== 'v3') {
+    console.warn('[HybridKeypairStore] Keystore is not v3, no previous keypairs available');
+    return [];
+  }
+  
+  const keystoreV3 = keystore as unknown as EncryptedKeystoreV3;
+  
+  if (!keystoreV3.previousKeypairs || keystoreV3.previousKeypairs.length === 0) {
+    console.log('[HybridKeypairStore] No previous keypairs in keystore');
+    return [];
+  }
+  
+  console.log(`[HybridKeypairStore] Loading ${keystoreV3.previousKeypairs.length} previous keypairs...`);
+  
+  const previousKeypairs: Array<{
+    keypair: HybridKeypair;
+    keyId: string;
+    createdAt: Date;
+    retiredAt: Date;
+    reason: string;
+  }> = [];
+  
+  for (const retiredKeypair of keystoreV3.previousKeypairs) {
+    try {
+      // Build temporary v1-compatible keystore for decryption
+      const tempKeystore: EncryptedKeystore = {
+        version: 'v1',
+        algorithm: keystoreV3.algorithm,
+        salt: keystoreV3.salt,
+        iterations: keystoreV3.iterations,
+        encryptedKeypair: retiredKeypair.encryptedKeypair,
+        iv: retiredKeypair.iv,
+        publicKey: retiredKeypair.publicKey,
+        createdAt: retiredKeypair.createdAt,
+      };
+      
+      // Decrypt keypair
+      const decrypted = await decryptKeypair(tempKeystore, password);
+      
+      previousKeypairs.push({
+        keypair: decrypted.keypair,
+        keyId: retiredKeypair.keyId,
+        createdAt: new Date(retiredKeypair.createdAt),
+        retiredAt: new Date(retiredKeypair.retiredAt),
+        reason: retiredKeypair.reason,
+      });
+      
+      console.log(`[HybridKeypairStore] Decrypted previous keypair: ${retiredKeypair.keyId} (retired: ${retiredKeypair.retiredAt})`);
+    } catch (error) {
+      console.error(`[HybridKeypairStore] Failed to decrypt previous keypair ${retiredKeypair.keyId}:`, error);
+      // Continue with other keypairs (partial success is acceptable)
+    }
+  }
+  
+  console.log(`[HybridKeypairStore] Successfully loaded ${previousKeypairs.length} of ${keystoreV3.previousKeypairs.length} previous keypairs`);
+  return previousKeypairs;
+}
+
+/**
+ * Load keystore with full history (current + previous keypairs)
+ * 
+ * PHASE 20: Unified loading function for rotation and playback
+ * 
+ * @param password - User's vault password
+ * @returns Decrypted keystore with history
+ */
+export async function loadKeypairWithHistory(
+  password: string
+): Promise<DecryptedKeypairWithHistory | null> {
+  const keystore = await loadKeystore();
+  
+  if (!keystore) {
+    return null;
+  }
+  
+  // Decrypt current keypair
+  const current = await decryptKeypair(keystore, password);
+  
+  // Decrypt previous keypairs (if v3)
+  const previous = await loadPreviousKeypairs(password);
+  
+  // Get rotation history (if v3)
+  const rotationHistory = (keystore as any).version === 'v3'
+    ? ((keystore as unknown as EncryptedKeystoreV3).rotationHistory || [])
+    : [];
+  
+  return {
+    keypair: current,
+    previousKeypairs: previous,
+    rotationHistory,
+  };
+}
+

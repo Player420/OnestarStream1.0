@@ -1,0 +1,38 @@
+import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+import "./globals.css";
+import { BackgroundSyncProvider } from "@/lib/BackgroundSyncProvider";
+import { ToastProvider } from "@/lib/SyncNotifications";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+export const metadata: Metadata = {
+  title: "OnestarStream",
+  description: "Local serverless-style streaming & file sharing MVP.",
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+        <BackgroundSyncProvider>
+          <ToastProvider>
+            {children}
+          </ToastProvider>
+        </BackgroundSyncProvider>
+      </body>
+    </html>
+  );
+}
